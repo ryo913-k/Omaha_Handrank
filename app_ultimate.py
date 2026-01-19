@@ -79,16 +79,15 @@ def get_hand_tags(hand_str):
     return tags
 
 # ==========================================
-# データロード (計算式修正版)
+# データロード
 # ==========================================
 @st.cache_data
-def load_plo_data_v5(csv_path="plo_detailed_ranking.zip"):
+def load_plo_data_v6(csv_path="plo_detailed_ranking.zip"): # バージョン更新
     try:
         df = pd.read_csv(csv_path)
         df["card_set"] = df["hand"].apply(lambda x: frozenset(x.split()))
         
-        # --- ここから修正 ---
-        # CSVの値は「絶対勝率(Absolute Equity)」なので、Nut Equityは単純合計で算出する
+        # Absolute Equity to Nut Equity
         df["nut_equity"] = (
             df["win_SF"] + 
             df["win_Quads"] + 
@@ -96,17 +95,14 @@ def load_plo_data_v5(csv_path="plo_detailed_ranking.zip"):
             df["win_Flush"] + 
             df["win_Straight"]
         )
-        
-        # Nut Quality = Nut Equity / Total Equity (0除算対策)
+        # 0除算回避
         df["nut_quality"] = df["nut_equity"] / df["equity"]
         df["nut_quality"] = df["nut_quality"].fillna(0)
-        # ------------------
         
         df["rank"] = df["equity"].rank(ascending=False, method='first').astype(int)
         df["pct"] = (df["rank"] / len(df)) * 100
         df["tags"] = df["hand"].apply(get_hand_tags)
         
-        # Top Rank抽出
         def get_max_rank(hand_str):
             try:
                 cards = [SimpleCard(s) for s in hand_str.split()]
@@ -142,7 +138,7 @@ if 'flo8_input' not in st.session_state: st.session_state.flo8_input = "Ad Ah 2s
 tab_plo, tab_flo8, tab_guide = st.tabs(["🔥 PLO (Detailed)", "⚖️ FLO8", "📖 Guide"])
 
 with tab_plo:
-    df_plo = load_plo_data_v5()
+    df_plo = load_plo_data_v6()
     
     if df_plo is None:
         st.warning("Data loading failed. Please upload 'plo_detailed_ranking.zip'.")
@@ -185,6 +181,7 @@ with tab_plo:
             st.write(f"Top {d_limit} Results:")
             if filtered_df is not None:
                 if not filtered_df.empty:
+                    # リスト表示は「トップランキング」が見たいのでheadのままでOK
                     th = filtered_df.head(d_limit)
                     hset = set(high_tags)
                     for _, r in th.iterrows():
@@ -192,7 +189,7 @@ with tab_plo:
                         if high_tags and hset.issubset(set(r['tags'])): lbl = f"🎨 {lbl}"
                         if st.button(lbl, key=f"s_{r['rank']}"):
                             st.session_state.plo_input = r['hand']; st.rerun()
-                    st.caption(f"Found: {len(filtered_df):,}")
+                    st.caption(f"Found: {len(filtered_df):,} hands")
                 else: st.write("No hands found.")
             elif not (sel_top or inc_tags or exc_tags): st.write("(No filters)")
 
@@ -245,26 +242,21 @@ with tab_plo:
         with c2:
             if 'row' in locals():
                 st.subheader("📊 Win Distribution")
-                # 【修正】二重掛け算をやめ、CSVの絶対値をそのまま使う
                 w_sf = row["win_SF"]
                 w_qd = row["win_Quads"]
                 w_fh = row["win_FH"]
                 w_fl = row["win_Flush"]
                 w_st = row["win_Straight"]
                 
-                # Weak Win = Total Equity - Nut Equity (Strong Win)
-                # 浮動小数点の誤差でマイナスにならないようmax(0, ...)
                 nut_sum = w_sf + w_qd + w_fh + w_fl + w_st
                 w_wk = max(0, row["equity"] - nut_sum)
                 lse = 1.0 - row["equity"]
                 
-                # Pie Chart
                 sizes = [w_st, w_fl, w_sf+w_qd+w_fh, w_wk, lse]
                 labels = ['Straight+', 'Flush', 'FullHouse+', 'Pair (Fragile)', 'Lose']
                 colors = ['#4CAF50', '#2196F3', '#9C27B0', '#FFC107', '#EEEEEE']
                 
                 fig1, ax1 = plt.subplots(figsize=(4, 3))
-                # 0.1%未満は表示しない
                 pdata = [(s,l,c) for s,l,c in zip(sizes, labels, colors) if s > 0.001]
                 if pdata:
                     ps, pl, pc = zip(*pdata)
@@ -288,6 +280,9 @@ with tab_plo:
                 st.pyplot(fig3)
 
             with cc2:
+                # ==========================
+                # Scatter Plot (修正箇所)
+                # ==========================
                 cmode = st.radio("Scatter", ["Mode A", "Mode B"], horizontal=True, label_visibility="collapsed")
                 st.caption("Mode A: Eq vs Quality / Mode B: Eq vs Nut Eq")
                 azoom = st.checkbox("🔍 Auto Zoom", True)
@@ -309,20 +304,38 @@ with tab_plo:
                 xmin, xmax, ymin, ymax = mx, mx, my, my
                 focused = False
 
+                # 【修正1】フィルタ済みデータ (Gold) の間引き方を変更
                 if filtered_df is not None and not filtered_df.empty:
-                    fdf = filtered_df.head(2000)
+                    # head(2000)ではなく、数が多ければランダムサンプリングする
+                    if len(filtered_df) > 2000:
+                        fdf = filtered_df.sample(n=2000, random_state=42)
+                    else:
+                        fdf = filtered_df
+                        
                     fx, fy = gxy(fdf, cmode)
                     ax2.scatter(fx, fy, fc='none', ec='gold', s=30)
                     xmin, xmax = min(xmin, fx.min()), max(xmax, fx.max())
                     ymin, ymax = min(ymin, fy.min()), max(ymax, fy.max())
                     focused = True
                 
+                # 【修正2】ハイライトデータ (Magenta) の間引き方を変更
                 if high_tags:
                     ht = set(high_tags)
+                    # 検索対象: フィルタがあればそこから、なければ全体から
                     src = filtered_df if filtered_df is not None else df_plo
-                    src = src if len(src)<10000 else src.head(10000)
-                    hdf = src[src["tags"].apply(lambda t: ht.issubset(set(t)))].head(2000)
-                    if not hdf.empty:
+                    
+                    # 全体からタグ検索 (applyは少し重いが正確さを優先)
+                    # 以前の head(10000) 制限を撤廃し、全体から探す
+                    mask = src["tags"].apply(lambda t: ht.issubset(set(t)))
+                    hdf_all = src[mask]
+                    
+                    if not hdf_all.empty:
+                        # ここでも数が多ければサンプリング
+                        if len(hdf_all) > 2000:
+                            hdf = hdf_all.sample(n=2000, random_state=42)
+                        else:
+                            hdf = hdf_all
+
                         hx, hy = gxy(hdf, cmode)
                         ax2.scatter(hx, hy, fc='none', ec='#FF00FF', s=60, lw=2)
                         xmin, xmax = min(xmin, hx.min()), max(xmax, hx.max())
@@ -344,7 +357,6 @@ with tab_plo:
                 st.pyplot(fig2)
 
 with tab_flo8:
-    # 変更なし
     df8 = load_flo8_data()
     if df8 is not None:
         c1, c2 = st.columns([1,2])
