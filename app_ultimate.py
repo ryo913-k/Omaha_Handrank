@@ -100,7 +100,7 @@ def get_hand_tags(hand_str):
     return tags
 
 # ==========================================
-# データロード (Top Rank列を追加)
+# データロード (ロジック強化版)
 # ==========================================
 @st.cache_data
 def load_plo_data_v4(csv_path="plo_detailed_ranking.zip"):
@@ -113,23 +113,21 @@ def load_plo_data_v4(csv_path="plo_detailed_ranking.zip"):
         df["nut_equity"] = df["equity"] * df["nut_quality"]
         df["tags"] = df["hand"].apply(get_hand_tags)
         
-        # 【追加】Top Rank の抽出
-        # 前提: 生成スクリプトがソート済み(強いカードが先頭)であること
-        # "As Ks..." -> split()[0]は"As" -> [:-1]は"A"
-        df["top_rank"] = df["hand"].apply(lambda x: x.split()[0][:-1])
-        
-        df = df.sort_values("rank")
-        return df
-    except FileNotFoundError:
-        return None
+        # 【修正】並び順に依存せず、ハンド内の「最大ランク」を正確に抽出する
+        def get_max_rank(hand_str):
+            try:
+                # 文字列 "As Kd..." を SimpleCard オブジェクトに変換
+                cards = [SimpleCard(s) for s in hand_str.split()]
+                # ランクの数値(0-12)が最大のものを探す
+                max_card = max(cards, key=lambda c: c.rank)
+                # そのカードのランク文字(A, K...)を復元する
+                ranks_char = "23456789TJQKA"
+                return ranks_char[max_card.rank]
+            except:
+                return "?"
 
-@st.cache_data
-def load_flo8_data(csv_path="flo8_ranking.csv"):
-    try:
-        df = pd.read_csv(csv_path)
-        df["card_set"] = df["hand"].apply(lambda x: frozenset(x.split()))
-        df["rank"] = df["equity"].rank(ascending=False, method='first').astype(int)
-        df["pct_total"] = (df["rank"] / len(df)) * 100
+        df["top_rank"] = df["hand"].apply(get_max_rank)
+        
         df = df.sort_values("rank")
         return df
     except FileNotFoundError:
