@@ -1,155 +1,147 @@
-import eval7
+import collections
 
-def get_cards_objects(hand_str):
+# ---------------------------------------------------------
+# 簡易カードクラス (eval7を使わずにカードを処理するため)
+# ---------------------------------------------------------
+class SimpleCard:
+    def __init__(self, card_str):
+        if not card_str:
+            self.rank = -1
+            self.suit = ''
+            return
+            
+        rank_char = card_str[:-1].upper()
+        suit_char = card_str[-1].lower()
+        
+        # ランクを数値に変換 (2=0, ... A=12)
+        ranks = "23456789TJQKA"
+        if rank_char in ranks:
+            self.rank = ranks.index(rank_char)
+        else:
+            self.rank = -1
+            
+        self.suit = suit_char
+        self.raw = card_str
+
+# ---------------------------------------------------------
+# FLO8 (Hutchinson Point Count System) 計算ロジック
+# ---------------------------------------------------------
+def calculate_flo8_heuristic(hand_str):
+    """
+    Hutchinson Point Count Systemに基づき、
+    FLO8におけるハンドの強さを評価する。
+    """
     try:
-        return [eval7.Card(s) for s in hand_str.split()]
+        cards = [SimpleCard(s) for s in hand_str.split()]
     except:
-        return []
+        return 0, {"Error": 0}
 
-# --- PLO (High Only) 用ヒューリスティック ---
-def calculate_plo_heuristic(hand_str):
-    cards = get_cards_objects(hand_str)
-    if len(cards) != 4: return 0, {}
-    
-    # 【修正】基準点を50.0に設定 (平均的なハンドの勝率)
-    score = 50.0
-    details = {"Base (Avg)": 50.0, "Structure": 0, "Suited": 0, "Pairs": 0}
-    
-    ranks = sorted([c.rank for c in cards], reverse=True)
+    if len(cards) != 4:
+        return 0, {"Invalid Hand": 0}
+
+    points = 0.0
+    details = {
+        "Low Potential": 0.0,
+        "High Pairs": 0.0,
+        "Suited Bonus": 0.0,
+        "Straight Potential": 0.0
+    }
+
+    ranks = [c.rank for c in cards]
     suits = [c.suit for c in cards]
     
-    # --- 1. Pairs ---
-    # AA=+16, KK=+13, QQ=+11, JJ=+9
-    rank_counts = {r: ranks.count(r) for r in ranks}
-    pairs = [r for r, c in rank_counts.items() if c == 2]
+    # 1. Low Potential (A=20, 2=9, 3=6, 4=4, 5=2)
+    # ペアになっているカードは、ローのセットとしては使えないため1枚分だけカウントするのが通例だが、
+    # 厳密なHutchinsonでは「アンペアのローカード」を評価する。
+    # ここでは簡易的に全てのローカードを加算し、ペア分は後で調整（あるいはそのまま評価）
+    low_values = {12: 20, 0: 9, 1: 6, 2: 4, 3: 2} # 12=A, 0=2, 1=3...
     
-    pair_score = 0
-    for p in pairs:
-        if p == 12: pair_score += 15.7 # AA
-        elif p == 11: pair_score += 12.6 # KK
-        elif p == 10: pair_score += 10.5 # QQ
-        elif p == 9: pair_score += 8.6   # JJ
-        else: pair_score -= 0.4          # TT-22 (平均よりわずかに弱い)
-    
-    # ペナルティ
-    if 3 in rank_counts.values(): pair_score -= 2.0
-    if 4 in rank_counts.values(): pair_score -= 5.0
-    
-    score += pair_score
-    details["Pairs"] += pair_score
+    current_low_pts = 0
+    # 重複を除く（A A 2 3 なら Aは1回だけカウント -> ローを作る能力）
+    unique_ranks = set(ranks)
+    for r in unique_ranks:
+        if r in low_values:
+            current_low_pts += low_values[r]
+            
+    points += current_low_pts
+    details["Low Potential"] = current_low_pts
 
-    # --- 2. Suitedness ---
-    s_counts = {s: suits.count(s) for s in suits}
-    counts_list = sorted(list(s_counts.values()), reverse=True)
-    suit_dist = counts_list + [0] * (4 - len(counts_list))
+    # 2. High Pairs
+    # AA=30, KK=16, QQ=13, JJ=10, TT=10, 99=9, 88=8
+    # 77-44=4-7pts (Middle pairs often devalued in FLO8)
+    # ここでは主要なペア得点を加算
+    rank_counts = collections.Counter(ranks)
+    pair_pts = 0
     
-    suit_score = 0
-    is_monotone = (suit_dist[0] == 4)
-    is_ds = (suit_dist[0] == 2 and suit_dist[1] == 2)
-    is_ss = (suit_dist[0] >= 2 and suit_dist[1] < 2 and not is_monotone)
-    is_rainbow = (suit_dist[0] == 1)
-    
-    # A-High Suit check
-    has_A_suit = False
-    if is_ds or is_ss or is_monotone:
-        for s, count in s_counts.items():
-            if count >= 2:
-                # そのスートを持つカードの中にAがあるか
-                suited_ranks = [c.rank for c in cards if c.suit == s]
-                if 12 in suited_ranks:
-                    has_A_suit = True
-
-    if is_ds:
-        suit_score += 3.5 
-        if has_A_suit: suit_score += 2.0 
-    elif is_ss:
-        if has_A_suit: suit_score += 4.0 
-        else: suit_score -= 1.0 
-    elif is_rainbow:
-        suit_score -= 3.0
-    elif is_monotone:
-        suit_score -= 3.0
-
-    score += suit_score
-    details["Suited"] += suit_score
-
-    # --- 3. Structure ---
-    struct_score = 0
-    unique_ranks = sorted(list(set(ranks)))
-    
-    if len(unique_ranks) == 4:
-        gap = unique_ranks[-1] - unique_ranks[0]
-        # 構造自体の平均的な強さ (データ上はマイナス補正)
-        if gap == 3: struct_score -= 1.4 # Run
-        elif gap == 4: struct_score -= 0.9 # 1-Gap
-        elif gap == 5: struct_score -= 1.3 # 2-Gap
-        else: struct_score -= 2.0 # Trash shape
-        
-        # ハイカードボーナス (構造の弱さをカードパワーで補う)
-        # A=+1.5, K=+1.0, Q=+0.5
-        for r in ranks:
-            if r == 12: struct_score += 1.5
-            elif r == 11: struct_score += 1.0
-            elif r == 10: struct_score += 0.5
-    else:
-        # ペアがある場合などのハイカード加点
-        for r in ranks:
-            if r >= 10: struct_score += 0.5
-
-    score += struct_score
-    details["Structure"] += struct_score
-    
-    return score, details
-
-# --- FLO8 (Fixed Limit Omaha 8) 用ヒューリスティック (変更なし) ---
-def calculate_flo8_heuristic(hand_str):
-    cards = get_cards_objects(hand_str)
-    if len(cards) != 4: return 0, {}
-    
-    score = 0
-    details = {"Suited": 0, "Pairs": 0, "Low": 0, "Connector": 0}
-    ranks = [c.rank for c in cards]
-    
-    # 1. Suitedness
-    suit_counts = {s: [] for s in range(4)}
-    for c in cards: suit_counts[c.suit].append(c.rank)
-    
-    for s in suit_counts:
-        rs = sorted(suit_counts[s], reverse=True)
-        if len(rs) >= 2:
-            hr = rs[0]
-            if hr == 12: pts = 4 
-            elif hr == 11: pts = 3 
-            elif hr == 10: pts = 2.5 
-            elif hr == 9: pts = 2 
-            elif hr <= 5: pts = 2 
-            else: pts = 1
-            score += pts; details["Suited"] += pts
-
-    # 2. Pairs
-    rank_counts = {r: ranks.count(r) for r in ranks}
     for r, count in rank_counts.items():
         if count == 2:
-            if r == 12: pts = 30 
-            elif r == 11: pts = 16 
-            elif r == 10: pts = 13 
-            elif r == 9: pts = 10 
-            else: pts = 4 
-            score += pts; details["Pairs"] += pts
-        elif count == 3: score += 2 
-        elif count == 4: score -= 10 
+            if r == 12: pair_pts += 30 # AA
+            elif r == 11: pair_pts += 16 # KK
+            elif r == 10: pair_pts += 13 # QQ
+            elif r == 9: pair_pts += 10 # JJ
+            elif r == 8: pair_pts += 10 # TT
+            elif r == 7: pair_pts += 9 # 99
+            elif r == 6: pair_pts += 8 # 88
+            else: pair_pts += 4 # Small pairs
+        elif count == 3:
+            # Trips are bad in Omaha
+            pair_pts -= 5 # Penalty roughly
+    
+    points += pair_pts
+    details["High Pairs"] = pair_pts
 
-    # 3. Low Potential
-    has_A, has_2, has_3 = (12 in ranks), (0 in ranks), (1 in ranks)
-    if has_A and has_2: score += 20; details["Low"] += 20
-    elif has_A and has_3: score += 15; details["Low"] += 15
-    elif 0 in ranks and 1 in ranks: score += 10; details["Low"] += 10
-    elif has_A and (2 in ranks or 3 in ranks): score += 5; details["Low"] += 5
+    # 3. Suited Bonus
+    # A-suited=4, K-suited=3, Q-suited=2.5, J-suited=2
+    # 2枚以上同じスートがある場合のみ加算
+    suit_counts = collections.Counter(suits)
+    suited_pts = 0
+    
+    for s, count in suit_counts.items():
+        if count >= 2:
+            # そのスートを持つカードの中で一番高いランクを見る
+            suited_cards_ranks = [c.rank for c in cards if c.suit == s]
+            max_r = max(suited_cards_ranks)
+            
+            if max_r == 12: suited_pts += 4 # A-High Flush Draw
+            elif max_r == 11: suited_pts += 3 # K-High
+            elif max_r == 10: suited_pts += 2.5 # Q-High
+            elif max_r == 9: suited_pts += 2 # J-High
+            elif max_r <= 8: suited_pts += 1 # Low Flush Draw
+            
+            # Double Suited Bonus
+            if count == 2 and len(suit_counts) == 2:
+                # すでに加算されているので追加ボーナスは微調整
+                pass
+                
+    points += suited_pts
+    details["Suited Bonus"] = suited_pts
 
-    # 4. Connector
-    sorted_unique = sorted(list(set(ranks)))
-    if len(sorted_unique) == 4:
-        gap = sorted_unique[-1] - sorted_unique[0]
-        if gap <= 4: score += 5; details["Connector"] += 5
+    # 4. Straight Potential (Connectivity)
+    # 簡易判定: ギャップの少なさで加点
+    # A,K,Q,J,T,9,8,7,6,5,4,3,2 (12..0)
+    # 20点満点くらいで評価
+    straight_pts = 0
+    unique_sorted = sorted(list(unique_ranks), reverse=True)
+    
+    if len(unique_sorted) >= 2:
+        gaps = 0
+        connections = 0
+        for i in range(len(unique_sorted)-1):
+            diff = unique_sorted[i] - unique_sorted[i+1]
+            if diff == 1:
+                connections += 1
+            elif diff == 2:
+                gaps += 1
+        
+        # 簡易評価
+        if connections == 3: straight_pts += 12 # Rundown
+        elif connections == 2: straight_pts += 8
+        elif connections == 1: straight_pts += 2
+        
+        # ギャップペナルティなしで加点のみ
+        if gaps > 0: straight_pts += 1
 
-    return score, details
+    points += straight_pts
+    details["Straight Potential"] = straight_pts
+
+    return int(points), details
