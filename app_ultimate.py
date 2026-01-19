@@ -3,15 +3,37 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import unicodedata
-import eval7
+# import eval7  <-- 削除 (これがエラーの原因)
 from heuristics import calculate_flo8_heuristic
 
 # ページ設定
 st.set_page_config(page_title="Omaha Ultimate Solver", layout="wide")
 
 # ==========================================
-# ユーティリティ & タグ判定ロジック
+# ユーティリティ & タグ判定ロジック (eval7非依存版)
 # ==========================================
+
+# eval7の代わりに使う軽量クラス
+class SimpleCard:
+    def __init__(self, card_str):
+        # "As", "Td", "9h" などを解析
+        if not card_str:
+            self.rank = -1
+            self.suit = ''
+            return
+            
+        rank_char = card_str[:-1].upper()
+        suit_char = card_str[-1].lower()
+        
+        # ランクを数値に変換 (2=0, ... A=12) eval7準拠
+        ranks = "23456789TJQKA"
+        if rank_char in ranks:
+            self.rank = ranks.index(rank_char)
+        else:
+            self.rank = -1 # Error
+            
+        self.suit = suit_char
+
 def normalize_input_text(text):
     if not text: return []
     text = unicodedata.normalize('NFKC', text)
@@ -25,13 +47,15 @@ def normalize_input_text(text):
     return cleaned_parts
 
 def get_hand_tags(hand_str):
-    """ハンド文字列からタグのリストを生成する"""
+    """ハンド文字列からタグのリストを生成する (SimpleCard使用)"""
     try:
-        cards = [eval7.Card(s) for s in hand_str.split()]
+        # eval7.Card ではなく SimpleCard を使用
+        cards = [SimpleCard(s) for s in hand_str.split()]
     except:
         return []
     
     tags = []
+    # ランク降順ソート
     ranks = sorted([c.rank for c in cards], reverse=True)
     suits = [c.suit for c in cards]
     
@@ -53,6 +77,7 @@ def get_hand_tags(hand_str):
     # 2. Suitedness Tags
     suit_counts = {s: suits.count(s) for s in suits}
     s_values = sorted(suit_counts.values(), reverse=True)
+    # 不足分を0埋めして4要素にする
     s_dist = s_values + [0] * (4 - len(s_values))
     
     is_ds = (s_dist[0] == 2 and s_dist[1] == 2)
@@ -69,8 +94,9 @@ def get_hand_tags(hand_str):
     if is_ds or is_ss or is_monotone:
         for s, count in suit_counts.items():
             if count >= 2:
+                # そのスートを持つカードのランクを探す
                 suited_ranks = [c.rank for c in cards if c.suit == s]
-                if 12 in suited_ranks:
+                if 12 in suited_ranks: # 12 = A
                     has_A_suit = True
     
     if has_A_suit:
@@ -87,7 +113,7 @@ def get_hand_tags(hand_str):
         elif gaps == [1, 1, 2]: tags.append("Bottom Gap Rundown")
         elif sum(gaps) == 5: tags.append("Double Gap Rundown")
         
-        if min(ranks) >= 8:
+        if min(ranks) >= 8: # 8 = Ten (2=0... T=8)
             tags.append("Broadway")
             
     return tags
@@ -96,9 +122,12 @@ def get_hand_tags(hand_str):
 # データロード
 # ==========================================
 @st.cache_data
-def load_plo_data_v2(csv_path="plo_detailed_ranking.zip"):
+def load_plo_data_v3(csv_path="plo_detailed_ranking.zip"): # zip対応
     try:
+        # ZIPのままでもpandasは読めることが多いですが
+        # エラーが出る場合は compression='zip' を明示
         df = pd.read_csv(csv_path)
+        
         df["card_set"] = df["hand"].apply(lambda x: frozenset(x.split()))
         df["rank"] = df["equity"].rank(ascending=False, method='first').astype(int)
         df["pct"] = (df["rank"] / len(df)) * 100
@@ -108,26 +137,24 @@ def load_plo_data_v2(csv_path="plo_detailed_ranking.zip"):
         df = df.sort_values("rank")
         return df
     except FileNotFoundError:
+        st.error(f"Error: {csv_path} not found. Please upload the data file.")
         return None
 
 @st.cache_data
-def load_flo8_data(csv_path="flo8_ranking.csv"):
-    paths = [csv_path, "omaha_hilo_ranking.csv"]
-    for p in paths:
-        try:
-            df = pd.read_csv(p)
-            df["card_set"] = df["hand"].apply(lambda x: frozenset(x.split()))
-            df["rank"] = df["equity"].rank(ascending=False, method='first').astype(int)
-            df["pct_total"] = (df["rank"] / len(df)) * 100
-            df["rank_high"] = df["high_equity"].rank(ascending=False, method='first')
-            df["pct_high"] = (df["rank_high"] / len(df)) * 100
-            df["rank_low"] = df["low_equity"].rank(ascending=False, method='first')
-            df["pct_low"] = (df["rank_low"] / len(df)) * 100
-            df = df.sort_values("rank")
-            return df
-        except FileNotFoundError:
-            continue
-    return None
+def load_flo8_data(csv_path="flo8_ranking.csv"): # こちらも必要ならzipに
+    try:
+        df = pd.read_csv(csv_path)
+        df["card_set"] = df["hand"].apply(lambda x: frozenset(x.split()))
+        df["rank"] = df["equity"].rank(ascending=False, method='first').astype(int)
+        df["pct_total"] = (df["rank"] / len(df)) * 100
+        df["rank_high"] = df["high_equity"].rank(ascending=False, method='first')
+        df["pct_high"] = (df["rank_high"] / len(df)) * 100
+        df["rank_low"] = df["low_equity"].rank(ascending=False, method='first')
+        df["pct_low"] = (df["rank_low"] / len(df)) * 100
+        df = df.sort_values("rank")
+        return df
+    except FileNotFoundError:
+        return None
 
 # ==========================================
 # UI ロジック
@@ -143,10 +170,10 @@ if 'flo8_input' not in st.session_state:
 tab_plo, tab_flo8, tab_guide = st.tabs(["🔥 PLO (Detailed)", "⚖️ FLO8 (Hi/Lo)", "📖 Guide"])
 
 with tab_plo:
-    df_plo = load_plo_data_v2()
+    df_plo = load_plo_data_v3()
     
     if df_plo is None:
-        st.error("エラー: 'plo_detailed_ranking.csv' が見つかりません。")
+        st.warning("Data loading failed.")
     else:
         # --- サイドバー ---
         with st.sidebar:
@@ -170,7 +197,8 @@ with tab_plo:
             st.divider()
             display_limit = st.slider("Display Limit", 5, 100, 20, 5)
             
-            # フィルタリング
+            st.write(f"Top {display_limit} Results:")
+            
             filtered_df_all = None
             if included_tags or excluded_tags:
                 inc_set = set(included_tags)
@@ -184,8 +212,6 @@ with tab_plo:
                 
                 filtered_df_all = df_plo[df_plo["tags"].apply(check_filter)]
             
-            # リスト表示
-            st.write(f"Top {display_limit} Results:")
             if filtered_df_all is not None:
                 if not filtered_df_all.empty:
                     top_hands = filtered_df_all.head(display_limit)
@@ -316,9 +342,7 @@ with tab_plo:
             c_chart1, c_chart2 = st.columns(2)
             
             with c_chart1:
-                # ==============================
                 # Equity Curve
-                # ==============================
                 c_head, c_check = st.columns([3, 1])
                 with c_head: st.subheader("📈 Equity Curve")
                 with c_check:
@@ -327,7 +351,6 @@ with tab_plo:
                 sample_curve = df_plo.iloc[::200, :]
                 fig3, ax3 = plt.subplots(figsize=(5, 4))
                 
-                # 横軸: Top %
                 ax3.plot(sample_curve["pct"], sample_curve["equity"], color="#cccccc", label="All Hands")
                 ax3.scatter(row["pct"], row["equity"], color="red", s=100, zorder=5, label="You")
                 
@@ -344,9 +367,7 @@ with tab_plo:
                 st.pyplot(fig3)
 
             with c_chart2:
-                # ==============================
                 # Scatter Plot
-                # ==============================
                 col_title, col_toggle = st.columns([2, 1])
                 with col_title: 
                     chart_mode = st.radio(
@@ -367,7 +388,6 @@ with tab_plo:
 
                 scatter_df_bg = get_plo_scatter_background(df_plo)
 
-                # データ準備
                 plot_filtered_df = pd.DataFrame()
                 if filtered_df_all is not None:
                     plot_filtered_df = filtered_df_all.head(2000)
@@ -376,17 +396,13 @@ with tab_plo:
                 if highlight_tags:
                     hl_set = set(highlight_tags)
                     target_df = filtered_df_all if filtered_df_all is not None else df_plo
-                    # 全データからハイライトを探す（表示制限付き）
-                    # フィルタがある場合はフィルタ内から、なければ全データから（ただし重いのでサンプルから）
-                    # サンプルだけだと見つからない問題があったため、ここでは全データからhead(2000)で探す
+                    # ハイライト検索
                     if filtered_df_all is not None:
-                         # フィルタ結果の中でハイライト
                          hl_mask = filtered_df_all["tags"].apply(lambda t: hl_set.issubset(set(t)))
                          plot_highlight_df = filtered_df_all[hl_mask].head(2000)
                     else:
-                         # フィルタなしでハイライトのみ -> 重いので5000件程度から探す簡易実装
-                         # 実用上はフィルタと組み合わせることが多い
-                         temp_sample = df_plo.head(10000) # 上位1万件から探す
+                         # フィルタなし、ハイライトのみ (重いのでサンプルから)
+                         temp_sample = df_plo.head(10000) 
                          hl_mask = temp_sample["tags"].apply(lambda t: hl_set.issubset(set(t)))
                          plot_highlight_df = temp_sample[hl_mask].head(2000)
                 
@@ -409,40 +425,39 @@ with tab_plo:
                     c_bg = 1.0 - (bg_x - bg_y) 
                     ax2.plot([0, 1], [0, 1], ls="--", c="gray", alpha=0.5)
 
-                # Background
                 ax2.scatter(bg_x, bg_y, c=c_bg, cmap="coolwarm_r", s=10, alpha=0.1, label='Others')
 
-                # Auto Zoom用の範囲初期化: 自分自身だけ
+                # Auto Zoom用範囲
                 x_min, x_max = my_x, my_x
                 y_min, y_max = my_y, my_y
+                has_focus = False
 
-                # Filtered
                 if not plot_filtered_df.empty:
                     f_x, f_y = get_xy(plot_filtered_df, chart_mode)
                     ax2.scatter(f_x, f_y, facecolors='none', edgecolors='gold', s=30, linewidth=1.0, label='Filtered')
                     x_min, x_max = min(x_min, f_x.min()), max(x_max, f_x.max())
                     y_min, y_max = min(y_min, f_y.min()), max(y_max, f_y.max())
-                elif plot_highlight_df.empty:
-                    # フィルタもハイライトもない場合は背景全体を表示
-                    x_min, x_max = bg_x.min(), bg_x.max()
-                    y_min, y_max = bg_y.min(), bg_y.max()
+                    has_focus = True
 
-                # Highlighted
                 if not plot_highlight_df.empty:
                     h_x, h_y = get_xy(plot_highlight_df, chart_mode)
                     ax2.scatter(h_x, h_y, facecolors='none', edgecolors='#FF00FF', s=60, linewidth=2.0, label='Highlighted', zorder=5)
                     x_min, x_max = min(x_min, h_x.min()), max(x_max, h_x.max())
                     y_min, y_max = min(y_min, h_y.min()), max(y_max, h_y.max())
+                    has_focus = True
 
-                # You
                 ax2.scatter(my_x, my_y, c='black', s=150, marker='*', edgecolors='white', label='You', zorder=10)
+                
                 # 自分が範囲外にならないように
                 x_min, x_max = min(x_min, my_x), max(x_max, my_x)
                 y_min, y_max = min(y_min, my_y), max(y_max, my_y)
 
-                # --- Limit Setting ---
                 if use_auto_zoom:
-                    # 局所化防止 (最低スパンの確保)
+                    # フィルタもハイライトもない場合は背景全体を表示 (has_focusで判断)
+                    if not has_focus:
+                        x_min, x_max = bg_x.min(), bg_x.max()
+                        y_min, y_max = bg_y.min(), bg_y.max()
+
                     min_span = 0.2
                     if (x_max - x_min) < min_span:
                         diff = (min_span - (x_max - x_min)) / 2
@@ -455,10 +470,10 @@ with tab_plo:
                     ax2.set_xlim(max(0, x_min - margin), min(1, x_max + margin))
                     ax2.set_ylim(max(0, y_min - margin), min(1, y_max + margin))
                 else:
-                    # Full View
                     ax2.set_xlim(0, 1.05)
                     ax2.set_ylim(0, 1.05)
 
+                ax2.set_xlabel("Raw Equity")
                 ax2.legend(loc='upper left', fontsize=8)
                 ax2.grid(True, linestyle='--', alpha=0.3)
                 st.pyplot(fig2)
@@ -466,7 +481,7 @@ with tab_plo:
 with tab_flo8:
     st.header("FLO8 Strategy (Fixed Limit)")
     df_flo8 = load_flo8_data()
-    if df_flo8 is None: st.error("FLO8 Data not found.")
+    if df_flo8 is None: st.warning("FLO8 data not loaded.")
     else:
         with st.expander("🔍 Rank Search"):
             c1, c2 = st.columns([1, 3])
