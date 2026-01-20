@@ -29,25 +29,20 @@ def normalize_input_text(text):
         if len(p) >= 2: cleaned.append(p[:-1].upper() + p[-1].lower())
     return cleaned
 
-# 【修正】カード表示関数 (インデントによるコードブロック化を防止)
 def render_hand_html(hand_str):
     if not hand_str: return ""
     cards = hand_str.split()
-    
     suit_map = {'s': '♠', 'h': '♥', 'd': '♦', 'c': '♣'}
     color_map = {'s': 'black', 'h': '#d32f2f', 'd': '#1976d2', 'c': '#388e3c'}
     
-    # 改行なしで記述してMarkdownの誤認識を防ぐ
     html = "<div style='display:flex; gap:8px; margin-bottom:10px;'>"
     for c in cards:
         if len(c) < 2: continue
         rank = c[:-1]
         suit = c[-1].lower()
-        
         symbol = suit_map.get(suit, suit)
         color = color_map.get(suit, 'black')
         
-        # style属性を1行にまとめる
         style = (
             f"width:45px; height:60px; background-color:white; "
             f"border:1px solid #bbb; border-radius:6px; "
@@ -55,9 +50,7 @@ def render_hand_html(hand_str):
             f"font-size:20px; font-weight:bold; color:{color}; "
             f"box-shadow:2px 2px 5px rgba(0,0,0,0.1);"
         )
-        
         html += f"<div style='{style}'>{rank}{symbol}</div>"
-        
     html += "</div>"
     return html
 
@@ -68,7 +61,6 @@ def get_hand_tags(hand_str):
     ranks = sorted([c.rank for c in cards], reverse=True)
     suits = [c.suit for c in cards]
     
-    # Pairs
     rc = {r: ranks.count(r) for r in ranks}
     pairs = [r for r, c in rc.items() if c == 2]
     if 12 in pairs: tags.append("AA")
@@ -78,7 +70,6 @@ def get_hand_tags(hand_str):
     elif len(pairs)==1: tags.append("Single Pair")
     elif len(set(ranks))==4: tags.append("No Pair")
 
-    # Suits
     sc = {s: suits.count(s) for s in suits}
     sv = sorted(sc.values(), reverse=True)
     s_dist = sv + [0]*(4-len(sv))
@@ -98,7 +89,6 @@ def get_hand_tags(hand_str):
                 if 12 in [card.rank for card in cards if card.suit==s]: has_A_suit=True
     if has_A_suit: tags.append("A-High Suit")
 
-    # Rundowns
     if len(set(ranks))==4:
         ur = sorted(list(set(ranks)), reverse=True)
         gaps = [ur[i]-ur[i+1] for i in range(3)]
@@ -110,6 +100,10 @@ def get_hand_tags(hand_str):
         if min(ranks)>=8: tags.append("Broadway")
     return tags
 
+# 【追加】コールバック関数 (ボタン押下時に安全にセッションステートを更新する)
+def set_plo_input(hand_str):
+    st.session_state.plo_input = hand_str
+
 # ==========================================
 # データロード
 # ==========================================
@@ -119,7 +113,6 @@ def load_plo_data_final(csv_path="plo_detailed_ranking.zip"):
         df = pd.read_csv(csv_path)
         df["card_set"] = df["hand"].apply(lambda x: frozenset(x.split()))
         
-        # Absolute Equity to Nut Equity
         df["nut_equity"] = (
             df["win_SF"] + 
             df["win_Quads"] + 
@@ -127,7 +120,6 @@ def load_plo_data_final(csv_path="plo_detailed_ranking.zip"):
             df["win_Flush"] + 
             df["win_Straight"]
         )
-        # 0除算回避
         df["nut_quality"] = df["nut_equity"] / df["equity"]
         df["nut_quality"] = df["nut_quality"].fillna(0)
         
@@ -179,27 +171,23 @@ with tab_plo:
         with st.sidebar:
             st.header("🏷️ Hand Filters")
             
-            # Top Rank
             st.markdown("##### 🃏 Top Rank")
             ranks_opt = list("AKQJT98765432")
             sel_top = st.multiselect("Select Highest Rank", ranks_opt)
             st.divider()
 
-            # Tags
             st.markdown("##### 🏷️ Tags")
             avail_tags = ["AA","KK","QQ","Double Pair","Double Suited","Single Suited","A-High Suit","Rainbow","Monotone","Broadway","Perfect Rundown","Top Gap Rundown","Mid Gap Rundown","Bottom Gap Rundown","Double Gap Rundown"]
             inc_tags = st.multiselect("✅ Include (AND)", avail_tags)
             exc_tags = st.multiselect("🚫 Exclude (NOT)", avail_tags)
             st.divider()
             
-            # Highlight
             st.markdown("##### 🎨 Highlight")
             high_tags = st.multiselect("Visual Highlight", avail_tags)
             st.divider()
             
             d_limit = st.slider("Display Limit", 5, 100, 20, 5)
             
-            # Filter Logic
             filtered_df = None
             if sel_top or inc_tags or exc_tags:
                 tmp = df_plo
@@ -209,7 +197,6 @@ with tab_plo:
                     tmp = tmp[tmp["tags"].apply(lambda t: iset.issubset(set(t)) and eset.isdisjoint(set(t)))]
                 filtered_df = tmp
 
-            # List
             st.write(f"Top {d_limit} Results:")
             if filtered_df is not None:
                 if not filtered_df.empty:
@@ -253,7 +240,6 @@ with tab_plo:
             inp_raw = st.text_input("Enter Hand", key='plo_input')
             inp = normalize_input_text(inp_raw)
             
-            # カード表示
             if inp:
                 st.markdown(render_hand_html(" ".join(inp)), unsafe_allow_html=True)
             
@@ -308,12 +294,25 @@ with tab_plo:
             with cc1:
                 st.subheader("📈 Equity Curve")
                 
+                # シークバー
                 seek_pct = st.slider("🔍 Seek Hand Strength (Top X%)", 0.0, 100.0, 10.0, 0.1)
                 
+                # 該当ハンド特定
                 s_idx = int(len(df_plo) * (seek_pct / 100))
                 if s_idx >= len(df_plo): s_idx = len(df_plo) - 1
                 s_row = df_plo.iloc[s_idx]
+
+                # 【レイアウト変更】詳細表示をグラフの上に配置
+                st.info(f"**Top {seek_pct:.1f}% Boundary**")
+                sk1, sk2 = st.columns([3, 1])
+                with sk1:
+                    st.markdown(render_hand_html(s_row['hand']), unsafe_allow_html=True)
+                    st.caption(f"Eq: {s_row['equity']*100:.1f}% | {' '.join(s_row['tags'])}")
+                with sk2:
+                    # 【修正】on_click コールバックを使用
+                    st.button("Analyze", on_click=set_plo_input, args=(s_row['hand'],))
                 
+                # チャート
                 scurve = df_plo.iloc[::200, :]
                 fig3, ax3 = plt.subplots(figsize=(5, 4))
                 ax3.plot(scurve["pct"], scurve["equity"], c="#cccccc", label="All")
@@ -330,18 +329,12 @@ with tab_plo:
                 ax3.legend()
                 ax3.grid(True, ls='--', alpha=0.3)
                 st.pyplot(fig3)
-                
-                st.info(f"**Top {seek_pct:.1f}% Boundary**")
-                sk1, sk2 = st.columns([3, 1])
-                with sk1:
-                    st.markdown(render_hand_html(s_row['hand']), unsafe_allow_html=True)
-                    st.caption(f"Eq: {s_row['equity']*100:.1f}% | {' '.join(s_row['tags'])}")
-                with sk2:
-                    if st.button("Analyze", key="b_seek"):
-                        st.session_state.plo_input = s_row['hand']; st.rerun()
 
             # --- Scatter Plot ---
             with cc2:
+                # 【レイアウト変更】見出しを追加
+                st.subheader("🌌 Equity Scatter")
+
                 cmode = st.radio("Scatter", ["Mode A", "Mode B"], horizontal=True, label_visibility="collapsed")
                 st.caption("Mode A: Eq vs Quality / Mode B: Eq vs Nut Eq")
                 azoom = st.checkbox("🔍 Auto Zoom", True)
