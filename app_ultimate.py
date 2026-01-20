@@ -458,8 +458,6 @@ elif game_mode == "FLO8 (Hi/Lo)":
                 st.caption(f"Rank: #{rr['rank']} (Top {rr['pct_total']:.1f}%)")
             else: st.warning("Not found.")
 
-# ... (前略) ...
-
 elif game_mode == "Guide":
     st.header("📖 Omaha Ultimate Solver 取扱説明書")
     
@@ -546,3 +544,7 @@ elif game_mode == "Guide":
     
     st.success("Analysis powered by custom simulation engine.")
 
+# サイドバー下部にクレジット表示
+with st.sidebar:
+    st.markdown("---")
+    st.markdown("© 2026 **Ryo** ([@Ryo_allin](https://x.com/Ryo_allin))")
