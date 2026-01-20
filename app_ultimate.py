@@ -100,9 +100,59 @@ def get_hand_tags(hand_str):
         if min(ranks)>=8: tags.append("Broadway")
     return tags
 
-# 【追加】コールバック関数 (ボタン押下時に安全にセッションステートを更新する)
 def set_plo_input(hand_str):
     st.session_state.plo_input = hand_str
+
+# 【追加】カードピッカーのレンダリング関数
+def draw_card_picker():
+    if 'picker_selection' not in st.session_state:
+        st.session_state.picker_selection = []
+
+    st.caption("👇 Select 4 cards to auto-fill input")
+    
+    # 現在の選択状態を表示
+    current_sel = st.session_state.picker_selection
+    if current_sel:
+        st.markdown(render_hand_html(" ".join(current_sel)), unsafe_allow_html=True)
+        if st.button("Clear Selection"):
+            st.session_state.picker_selection = []
+            st.rerun()
+    else:
+        st.write("(No cards selected)")
+
+    # グリッド表示 (Suits x Ranks)
+    suits_data = [('s', '♠'), ('h', '♥'), ('d', '♦'), ('c', '♣')]
+    ranks_data = list("AKQJT98765432")
+    
+    for suit_code, suit_icon in suits_data:
+        cols = st.columns(13)
+        for i, rank in enumerate(ranks_data):
+            card_val = f"{rank}{suit_code}"
+            
+            # 既に選択済みのカードは無効化(または視覚的に区別)したいが
+            # Streamlitのボタンはdisabledにすると押せないので、
+            # 選択済みかどうかのチェックをロジックで行う
+            is_selected = card_val in current_sel
+            
+            # ボタンのラベル
+            label = f"{rank}"
+            
+            # ボタン押下処理
+            if cols[i].button(label, key=f"btn_{card_val}", disabled=is_selected):
+                if len(current_sel) < 4:
+                    current_sel.append(card_val)
+                    st.session_state.picker_selection = current_sel
+                    
+                    # 4枚揃ったらメイン入力に反映してリロード
+                    if len(current_sel) == 4:
+                        final_hand = " ".join(current_sel)
+                        st.session_state.plo_input = final_hand
+                        st.session_state.picker_selection = [] # リセット
+                        st.rerun()
+                    else:
+                        st.rerun()
+        # 行の間に少し隙間
+        # st.write("") 
 
 # ==========================================
 # データロード
@@ -220,7 +270,7 @@ with tab_plo:
                 if not fr.empty:
                     r = fr.iloc[0]
                     st.markdown(f"**{r['hand']}** (Top {r['pct']:.2f}%) Tags: {' '.join(r['tags'])}")
-                    if st.button("Analyze", key="bcp"): st.session_state.plo_input=r['hand']; st.rerun()
+                    if st.button("Analyze", key="bcp", on_click=set_plo_input, args=(r['hand'],)): pass
 
         st.divider()
         
@@ -237,7 +287,12 @@ with tab_plo:
         c1, c2 = st.columns([1, 1.3])
         with c1:
             st.subheader("🔍 Hand Input")
-            inp_raw = st.text_input("Enter Hand", key='plo_input')
+            
+            # 【追加】カードピッカー (Expander)
+            with st.expander("🃏 Open Card Picker (Visual Input)"):
+                draw_card_picker()
+
+            inp_raw = st.text_input("Enter Hand (Text)", key='plo_input')
             inp = normalize_input_text(inp_raw)
             
             if inp:
@@ -294,25 +349,20 @@ with tab_plo:
             with cc1:
                 st.subheader("📈 Equity Curve")
                 
-                # シークバー
                 seek_pct = st.slider("🔍 Seek Hand Strength (Top X%)", 0.0, 100.0, 10.0, 0.1)
                 
-                # 該当ハンド特定
                 s_idx = int(len(df_plo) * (seek_pct / 100))
                 if s_idx >= len(df_plo): s_idx = len(df_plo) - 1
                 s_row = df_plo.iloc[s_idx]
 
-                # 【レイアウト変更】詳細表示をグラフの上に配置
                 st.info(f"**Top {seek_pct:.1f}% Boundary**")
                 sk1, sk2 = st.columns([3, 1])
                 with sk1:
                     st.markdown(render_hand_html(s_row['hand']), unsafe_allow_html=True)
                     st.caption(f"Eq: {s_row['equity']*100:.1f}% | {' '.join(s_row['tags'])}")
                 with sk2:
-                    # 【修正】on_click コールバックを使用
-                    st.button("Analyze", on_click=set_plo_input, args=(s_row['hand'],))
+                    st.button("Analyze", key="b_seek", on_click=set_plo_input, args=(s_row['hand'],))
                 
-                # チャート
                 scurve = df_plo.iloc[::200, :]
                 fig3, ax3 = plt.subplots(figsize=(5, 4))
                 ax3.plot(scurve["pct"], scurve["equity"], c="#cccccc", label="All")
@@ -332,7 +382,6 @@ with tab_plo:
 
             # --- Scatter Plot ---
             with cc2:
-                # 【レイアウト変更】見出しを追加
                 st.subheader("🌌 Equity Scatter")
 
                 cmode = st.radio("Scatter", ["Mode A", "Mode B"], horizontal=True, label_visibility="collapsed")
