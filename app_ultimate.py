@@ -9,7 +9,7 @@ from heuristics import calculate_flo8_heuristic
 st.set_page_config(page_title="Omaha Ultimate Solver", layout="wide")
 
 # ==========================================
-# ユーティリティ
+# ユーティリティ (eval7非依存)
 # ==========================================
 class SimpleCard:
     def __init__(self, card_str):
@@ -79,15 +79,15 @@ def get_hand_tags(hand_str):
     return tags
 
 # ==========================================
-# データロード
+# データロード (計算ロジック修正版)
 # ==========================================
 @st.cache_data
-def load_plo_data_v6(csv_path="plo_detailed_ranking.zip"): # バージョン更新
+def load_plo_data_final(csv_path="plo_detailed_ranking.zip"):
     try:
         df = pd.read_csv(csv_path)
         df["card_set"] = df["hand"].apply(lambda x: frozenset(x.split()))
         
-        # Absolute Equity to Nut Equity
+        # Absolute Equity to Nut Equity (正しい加算)
         df["nut_equity"] = (
             df["win_SF"] + 
             df["win_Quads"] + 
@@ -103,6 +103,7 @@ def load_plo_data_v6(csv_path="plo_detailed_ranking.zip"): # バージョン更�
         df["pct"] = (df["rank"] / len(df)) * 100
         df["tags"] = df["hand"].apply(get_hand_tags)
         
+        # Top Rank抽出 (並び順に依存せず最大値を探す)
         def get_max_rank(hand_str):
             try:
                 cards = [SimpleCard(s) for s in hand_str.split()]
@@ -138,7 +139,7 @@ if 'flo8_input' not in st.session_state: st.session_state.flo8_input = "Ad Ah 2s
 tab_plo, tab_flo8, tab_guide = st.tabs(["🔥 PLO (Detailed)", "⚖️ FLO8", "📖 Guide"])
 
 with tab_plo:
-    df_plo = load_plo_data_v6()
+    df_plo = load_plo_data_final()
     
     if df_plo is None:
         st.warning("Data loading failed. Please upload 'plo_detailed_ranking.zip'.")
@@ -181,7 +182,6 @@ with tab_plo:
             st.write(f"Top {d_limit} Results:")
             if filtered_df is not None:
                 if not filtered_df.empty:
-                    # リスト表示は「トップランキング」が見たいのでheadのままでOK
                     th = filtered_df.head(d_limit)
                     hset = set(high_tags)
                     for _, r in th.iterrows():
@@ -189,7 +189,7 @@ with tab_plo:
                         if high_tags and hset.issubset(set(r['tags'])): lbl = f"🎨 {lbl}"
                         if st.button(lbl, key=f"s_{r['rank']}"):
                             st.session_state.plo_input = r['hand']; st.rerun()
-                    st.caption(f"Found: {len(filtered_df):,} hands")
+                    st.caption(f"Found: {len(filtered_df):,}")
                 else: st.write("No hands found.")
             elif not (sel_top or inc_tags or exc_tags): st.write("(No filters)")
 
@@ -267,22 +267,50 @@ with tab_plo:
         if 'row' in locals():
             st.divider()
             cc1, cc2 = st.columns(2)
+            
+            # --- Equity Curve & Seek Bar ---
             with cc1:
                 st.subheader("📈 Equity Curve")
-                z20 = st.checkbox("🔍 Zoom Top 20%", False)
+                
+                # シークバー
+                seek_pct = st.slider("🔍 Seek Hand Strength (Top X%)", 0.0, 100.0, 10.0, 0.1)
+                
+                # 該当ハンド特定
+                s_idx = int(len(df_plo) * (seek_pct / 100))
+                if s_idx >= len(df_plo): s_idx = len(df_plo) - 1
+                s_row = df_plo.iloc[s_idx]
+                
+                # チャート
                 scurve = df_plo.iloc[::200, :]
                 fig3, ax3 = plt.subplots(figsize=(5, 4))
-                ax3.plot(scurve["pct"], scurve["equity"], c="#cccccc")
-                ax3.scatter(row["pct"], row["equity"], c="red", s=100, zorder=5)
+                ax3.plot(scurve["pct"], scurve["equity"], c="#cccccc", label="All")
+                ax3.scatter(row["pct"], row["equity"], c="red", s=150, marker='*', zorder=10, label="You")
+                ax3.scatter(s_row["pct"], s_row["equity"], c="blue", s=80, zorder=9, label="Seek")
+                ax3.axvline(x=seek_pct, color="blue", ls=":", alpha=0.5)
+                
                 ax3.set_xlabel("Top X% of Hands"); ax3.set_ylabel("Equity")
-                ax3.set_xlim(0, 20 if z20 else 100)
+                
+                # ズーム
+                zoom_chk = st.checkbox("Zoom around Seek", False)
+                if zoom_chk: ax3.set_xlim(max(0, seek_pct-10), min(100, seek_pct+10))
+                else: ax3.set_xlim(0, 100)
+                
+                ax3.legend()
                 ax3.grid(True, ls='--', alpha=0.3)
                 st.pyplot(fig3)
+                
+                # シーク詳細
+                st.info(f"**Top {seek_pct:.1f}% Boundary**")
+                sk1, sk2 = st.columns([3, 1])
+                with sk1:
+                    st.markdown(f"#### {s_row['hand']}")
+                    st.caption(f"Eq: {s_row['equity']*100:.1f}% | {' '.join(s_row['tags'])}")
+                with sk2:
+                    if st.button("Analyze", key="b_seek"):
+                        st.session_state.plo_input = s_row['hand']; st.rerun()
 
+            # --- Scatter Plot ---
             with cc2:
-                # ==========================
-                # Scatter Plot (修正箇所)
-                # ==========================
                 cmode = st.radio("Scatter", ["Mode A", "Mode B"], horizontal=True, label_visibility="collapsed")
                 st.caption("Mode A: Eq vs Quality / Mode B: Eq vs Nut Eq")
                 azoom = st.checkbox("🔍 Auto Zoom", True)
@@ -304,38 +332,25 @@ with tab_plo:
                 xmin, xmax, ymin, ymax = mx, mx, my, my
                 focused = False
 
-                # 【修正1】フィルタ済みデータ (Gold) の間引き方を変更
+                # Filtered (Random Sample if large)
                 if filtered_df is not None and not filtered_df.empty:
-                    # head(2000)ではなく、数が多ければランダムサンプリングする
-                    if len(filtered_df) > 2000:
-                        fdf = filtered_df.sample(n=2000, random_state=42)
-                    else:
-                        fdf = filtered_df
-                        
+                    fdf = filtered_df.sample(2000, random_state=42) if len(filtered_df)>2000 else filtered_df
                     fx, fy = gxy(fdf, cmode)
                     ax2.scatter(fx, fy, fc='none', ec='gold', s=30)
                     xmin, xmax = min(xmin, fx.min()), max(xmax, fx.max())
                     ymin, ymax = min(ymin, fy.min()), max(ymax, fy.max())
                     focused = True
                 
-                # 【修正2】ハイライトデータ (Magenta) の間引き方を変更
+                # Highlight (Global Search & Sample)
                 if high_tags:
                     ht = set(high_tags)
-                    # 検索対象: フィルタがあればそこから、なければ全体から
                     src = filtered_df if filtered_df is not None else df_plo
-                    
-                    # 全体からタグ検索 (applyは少し重いが正確さを優先)
-                    # 以前の head(10000) 制限を撤廃し、全体から探す
+                    # 全データから該当タグを抽出
                     mask = src["tags"].apply(lambda t: ht.issubset(set(t)))
                     hdf_all = src[mask]
                     
                     if not hdf_all.empty:
-                        # ここでも数が多ければサンプリング
-                        if len(hdf_all) > 2000:
-                            hdf = hdf_all.sample(n=2000, random_state=42)
-                        else:
-                            hdf = hdf_all
-
+                        hdf = hdf_all.sample(2000, random_state=42) if len(hdf_all)>2000 else hdf_all
                         hx, hy = gxy(hdf, cmode)
                         ax2.scatter(hx, hy, fc='none', ec='#FF00FF', s=60, lw=2)
                         xmin, xmax = min(xmin, hx.min()), max(xmax, hx.max())
@@ -345,9 +360,16 @@ with tab_plo:
                 ax2.scatter(mx, my, c='black', s=150, marker='*', ec='white', zorder=10)
 
                 if azoom:
+                    # フィルタもハイライトもないなら背景全体
                     if not focused: xmin, xmax, ymin, ymax = bx.min(), bx.max(), by.min(), by.max()
+                    
+                    # 局所化防止
                     if xmax==xmin: xmin-=0.1; xmax+=0.1
                     if ymax==ymin: ymin-=0.1; ymax+=0.1
+                    x_span, y_span = xmax-xmin, ymax-ymin
+                    if x_span < 0.2: d=(0.2-x_span)/2; xmin-=d; xmax+=d
+                    if y_span < 0.2: d=(0.2-y_span)/2; ymin-=d; ymax+=d
+                    
                     margin=0.05
                     ax2.set_xlim(max(0, xmin-margin), min(1, xmax+margin))
                     ax2.set_ylim(max(0, ymin-margin), min(1, ymax+margin))
