@@ -92,11 +92,22 @@ def get_hand_tags(hand_str):
         if min(ranks)>=8: tags.append("Broadway")
     return tags
 
+# 【修正】ボタン押下時にカードセレクターの状態もリセットする関数
 def set_input_callback(target_key, value):
+    # 1. メインの入力値を更新
     st.session_state[target_key] = value
+    
+    # 2. テキストボックスのウィジェット状態も同期
     widget_key = f"{target_key}_text"
     if widget_key in st.session_state:
         st.session_state[widget_key] = value
+    
+    # 3. 【重要】カードセレクター(Multiselect)の状態をクリアする
+    # これをしないと、古い選択状態が残ってしまい、即座に上書きされてしまう
+    for suit in ['s', 'h', 'd', 'c']:
+        ms_key = f"ms_{suit}_{target_key}"
+        if ms_key in st.session_state:
+            st.session_state[ms_key] = []
 
 # ==========================================
 # 3. Data Loading
@@ -194,20 +205,25 @@ if game_mode == "PLO (High Only)":
     if df_plo is None:
         st.warning("Data loading failed. Please upload 'plo_detailed_ranking.zip'.")
     else:
+        # --- PLO Sidebar (Improved Layout) ---
         with st.sidebar:
-            st.subheader("1. 🏷️ Filters (PLO)")
-            ranks_opt = list("AKQJT98765432")
-            sel_top = st.multiselect("Top Rank", ranks_opt)
-            
-            avail_tags = ["AA","KK","QQ","Double Pair","Double Suited","Single Suited","A-High Suit","Rainbow","Monotone","Broadway","Perfect Rundown","Double Gap Rundown"]
-            inc_tags = st.multiselect("Include", avail_tags)
-            exc_tags = st.multiselect("Exclude", avail_tags)
-            
-            st.markdown("##### 🎨 Highlight Groups")
-            hl_tags_1 = st.multiselect("Group 1 (🔴 Red)", avail_tags, key="hl1")
-            hl_tags_2 = st.multiselect("Group 2 (🔵 Blue)", avail_tags, key="hl2")
-            hl_tags_3 = st.multiselect("Group 3 (🟢 Green)", avail_tags, key="hl3")
-            
+            # 1. Filters (Collapsible, Default Open)
+            with st.expander("1. 🏷️ Filter Conditions", expanded=True):
+                ranks_opt = list("AKQJT98765432")
+                sel_top = st.multiselect("Top Rank", ranks_opt)
+                
+                avail_tags = ["AA","KK","QQ","Double Pair","Double Suited","Single Suited","A-High Suit","Rainbow","Monotone","Broadway","Perfect Rundown","Double Gap Rundown"]
+                inc_tags = st.multiselect("Include", avail_tags)
+                exc_tags = st.multiselect("Exclude", avail_tags)
+
+            # 2. Highlight (Collapsible, Default Closed)
+            with st.expander("2. 🎨 Highlight Groups", expanded=False):
+                hl_tags_1 = st.multiselect("Group 1 (🔴 Red)", avail_tags, key="hl1")
+                hl_tags_2 = st.multiselect("Group 2 (🔵 Blue)", avail_tags, key="hl2")
+                hl_tags_3 = st.multiselect("Group 3 (🟢 Green)", avail_tags, key="hl3")
+
+            # 3. Results List
+            st.divider()
             d_limit = st.slider("List Limit", 5, 100, 20, 5)
 
             filtered_df = None
@@ -219,7 +235,7 @@ if game_mode == "PLO (High Only)":
                     tmp = tmp[tmp["tags"].apply(lambda t: iset.issubset(set(t)) and eset.isdisjoint(set(t)))]
                 filtered_df = tmp
 
-            st.write(f"**Results (Top {d_limit})**")
+            st.markdown(f"**Results (Top {d_limit})**")
             if filtered_df is not None:
                 if not filtered_df.empty:
                     th = filtered_df.head(d_limit)
@@ -242,25 +258,27 @@ if game_mode == "PLO (High Only)":
 
             st.divider()
 
-            st.subheader("2. 🔍 Rank Search (PLO)")
-            c_rk1, c_rk2 = st.columns([1,2])
-            with c_rk1:
-                srk = st.number_input("Rank", 1, len(df_plo), 1, key="prk_plo", label_visibility="collapsed")
-            with c_rk2:
-                fr = df_plo[df_plo['rank']==srk]
+            # 4. Rank Search
+            with st.expander("3. 🔍 Rank Search", expanded=False):
+                c_rk1, c_rk2 = st.columns([1,2])
+                with c_rk1:
+                    srk = st.number_input("Rank", 1, len(df_plo), 1, key="prk_plo", label_visibility="collapsed")
+                with c_rk2:
+                    fr = df_plo[df_plo['rank']==srk]
+                    if not fr.empty:
+                        r = fr.iloc[0]
+                        if st.button("Analyze", key="bcp_plo"):
+                             set_input_callback('plo_input', r['hand'])
+                             st.rerun()
+                    else: st.write("-")
                 if not fr.empty:
-                    r = fr.iloc[0]
-                    if st.button("Analyze", key="bcp_plo"):
-                         set_input_callback('plo_input', r['hand'])
-                         st.rerun()
-                else: st.write("-")
-            if not fr.empty:
-                st.caption(f"**{r['hand']}** (Top {r['pct']:.2f}%)")
+                    st.caption(f"**{r['hand']}** (Top {r['pct']:.2f}%)")
 
-            st.divider()
-            st.subheader("3. ⚙️ Scenario")
-            spr = st.select_slider("Stack Depth / SPR", ["Short","Medium","Deep","Very Deep"], value="Medium")
-            nw = 0.0 if "Short" in spr else 0.3 if "Medium" in spr else 0.6 if "Deep" in spr else 0.8
+            # 5. Scenario
+            with st.expander("4. ⚙️ Scenario", expanded=False):
+                spr = st.select_slider("Stack Depth / SPR", ["Short","Medium","Deep","Very Deep"], value="Medium")
+                nw = 0.0 if "Short" in spr else 0.3 if "Medium" in spr else 0.6 if "Deep" in spr else 0.8
+                st.caption(f"Nut Weight: {nw*100:.0f}%")
 
         # --- PLO MAIN ---
         st.header("🔥 PLO Strategy")
@@ -327,7 +345,8 @@ if game_mode == "PLO (High Only)":
                     st.markdown(render_hand_html(s_row['hand']), unsafe_allow_html=True)
                     st.caption(f"Eq: {s_row['equity']*100:.1f}%")
                 with sk2:
-                    st.button("Analyze", key="b_seek_plo", on_click=set_input_callback, args=('plo_input', s_row['hand']))
+                    # Keyにseek_pctを含めることで、スライダー変更時にボタンを再生成し、引数を確実に更新する
+                    st.button("Analyze", key=f"b_seek_plo_{seek_pct}", on_click=set_input_callback, args=('plo_input', s_row['hand']))
                 
                 scurve = df_plo.iloc[::200, :]
                 fig3, ax3 = plt.subplots(figsize=(5, 4))
@@ -412,22 +431,23 @@ if game_mode == "PLO (High Only)":
 # ==========================================
 elif game_mode == "FLO8 (Hi/Lo)":
     with st.sidebar:
-        st.subheader("1. 🔍 Rank Search (FLO8)")
-        if df_flo8 is not None:
-            c_rk8_1, c_rk8_2 = st.columns([1,2])
-            with c_rk8_1:
-                srk8 = st.number_input("Rank", 1, len(df_flo8), 1, key="prk_flo8", label_visibility="collapsed")
-            with c_rk8_2:
-                fr8 = df_flo8[df_flo8['rank']==srk8]
+        # 1. Rank Search
+        with st.expander("1. 🔍 Rank Search", expanded=True):
+            if df_flo8 is not None:
+                c_rk8_1, c_rk8_2 = st.columns([1,2])
+                with c_rk8_1:
+                    srk8 = st.number_input("Rank", 1, len(df_flo8), 1, key="prk_flo8", label_visibility="collapsed")
+                with c_rk8_2:
+                    fr8 = df_flo8[df_flo8['rank']==srk8]
+                    if not fr8.empty:
+                        r8_found = fr8.iloc[0]
+                        if st.button("Analyze", key="bcp_flo8"):
+                             set_input_callback('flo8_input', r8_found['hand'])
+                             st.rerun()
+                    else: st.write("-")
                 if not fr8.empty:
-                    r8_found = fr8.iloc[0]
-                    if st.button("Analyze", key="bcp_flo8"):
-                         set_input_callback('flo8_input', r8_found['hand'])
-                         st.rerun()
-                else: st.write("-")
-            if not fr8.empty:
-                st.caption(f"**{r8_found['hand']}** (Top {r8_found['pct_total']:.2f}%)")
-        else: st.write("Data not loaded")
+                    st.caption(f"**{r8_found['hand']}** (Top {r8_found['pct_total']:.2f}%)")
+            else: st.write("Data not loaded")
 
     st.header("⚖️ FLO8 Strategy")
     render_card_selector('flo8_input')
