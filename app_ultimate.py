@@ -23,7 +23,6 @@ class SimpleCard:
         self.suit = card_str[-1].lower()
 
 def normalize_input_text(text):
-    """全角文字などを修正し、リスト形式で返す"""
     if not text: return []
     text = unicodedata.normalize('NFKC', text)
     parts = text.split()
@@ -33,7 +32,6 @@ def normalize_input_text(text):
     return cleaned
 
 def render_hand_html(hand_str):
-    """ハンドをHTMLカード画像として描画"""
     if not hand_str: return ""
     cards = hand_str.split()
     suit_map = {'s': '♠', 'h': '♥', 'd': '♦', 'c': '♣'}
@@ -59,7 +57,6 @@ def render_hand_html(hand_str):
     return html
 
 def get_hand_tags(hand_str):
-    """ハンドの特徴タグを生成"""
     try: cards = [SimpleCard(s) for s in hand_str.split()]
     except: return []
     tags = []
@@ -98,9 +95,16 @@ def get_hand_tags(hand_str):
         if min(ranks)>=8: tags.append("Broadway")
     return tags
 
-def set_input_callback(key, value):
-    """ボタン押下時に安全に入力を更新するコールバック"""
-    st.session_state[key] = value
+def set_input_callback(target_key, value):
+    """
+    ボタン押下時に、セッション状態と入力ウィジェットの両方を強制的に更新する。
+    これによりRank Searchなどが即座に反映されないバグを防ぐ。
+    """
+    st.session_state[target_key] = value
+    # テキスト入力ウィジェットのキー(通常は target_key + '_text')も更新する
+    widget_key = f"{target_key}_text"
+    if widget_key in st.session_state:
+        st.session_state[widget_key] = value
 
 # ==========================================
 # 3. Data Loading
@@ -110,11 +114,8 @@ def load_plo_data(csv_path="plo_detailed_ranking.zip"):
     try:
         df = pd.read_csv(csv_path)
         df["card_set"] = df["hand"].apply(lambda x: frozenset(x.split()))
-        
-        # Absolute Equity to Nut Equity
         df["nut_equity"] = (df["win_SF"] + df["win_Quads"] + df["win_FH"] + df["win_Flush"] + df["win_Straight"])
         df["nut_quality"] = (df["nut_equity"] / df["equity"]).fillna(0)
-        
         df["rank"] = df["equity"].rank(ascending=False, method='first').astype(int)
         df["pct"] = (df["rank"] / len(df)) * 100
         df["tags"] = df["hand"].apply(get_hand_tags)
@@ -142,10 +143,9 @@ def load_flo8_data(csv_path="flo8_ranking.csv"):
     except: return None
 
 # ==========================================
-# 4. UI Components (Reusable)
+# 4. UI Components
 # ==========================================
 def render_card_selector(session_key):
-    """スート別4カラムのカード入力UIを描画し、結果をsession_state[session_key]に反映する"""
     with st.expander("🃏 Open Card Selector (by Suit)", expanded=False):
         ranks_list = list("AKQJT98765432")
         c_s, c_h, c_d, c_c = st.columns(4)
@@ -163,12 +163,17 @@ def render_card_selector(session_key):
             st.markdown("**:green[♣ Clubs]**")
             sel_c = st.multiselect("Clubs", ranks_list, key=f"ms_c_{session_key}", label_visibility="collapsed")
 
-        # 統合
         collected = [f"{r}s" for r in sel_s] + [f"{r}h" for r in sel_h] + [f"{r}d" for r in sel_d] + [f"{r}c" for r in sel_c]
 
         if len(collected) == 4:
-            st.session_state[session_key] = " ".join(collected)
-            return collected # 決定したハンドリストを返す
+            # 入力完了時、セッション変数と入力欄の両方を更新する
+            final_hand = " ".join(collected)
+            # ここでは直接更新せず、親側で検知させるか、あるいは callback 的に処理する
+            # Multiselectはrerunをトリガーするので、親のレンダリング時に反映される
+            st.session_state[session_key] = final_hand
+            # Text widget用のキーも更新
+            st.session_state[f"{session_key}_text"] = final_hand
+            return collected
         elif len(collected) > 0:
             st.caption(f"Selected: {len(collected)}/4 cards.")
         
@@ -180,11 +185,13 @@ def render_card_selector(session_key):
 st.title("🃏 Omaha Ultimate Solver")
 st.caption("Strategic Analysis based on Win-Distribution & SPR")
 
-# Session State Init
+# Init Session State
 if 'plo_input' not in st.session_state: st.session_state.plo_input = "As Ks Jd Th"
 if 'flo8_input' not in st.session_state: st.session_state.flo8_input = "Ad Ah 2s 3d"
+# Text Input用キーの初期化 (同期ズレ防止)
+if 'plo_input_text' not in st.session_state: st.session_state.plo_input_text = st.session_state.plo_input
+if 'flo8_input_text' not in st.session_state: st.session_state.flo8_input_text = st.session_state.flo8_input
 
-# Data Load
 df_plo = load_plo_data()
 df_flo8 = load_flo8_data()
 
@@ -195,19 +202,20 @@ with tab_plo:
     if df_plo is None:
         st.warning("Data loading failed. Please upload 'plo_detailed_ranking.zip'.")
     else:
-        # Sidebar Filters
+        # ==========================================
+        # サイドバー: フィルタ / Rank Search / SPR設定
+        # ==========================================
         with st.sidebar:
-            st.header("🏷️ Hand Filters")
+            st.header("1. 🏷️ Filters")
             ranks_opt = list("AKQJT98765432")
-            sel_top = st.multiselect("Select Highest Rank", ranks_opt)
-            st.divider()
+            sel_top = st.multiselect("Top Rank", ranks_opt)
+            
             avail_tags = ["AA","KK","QQ","Double Pair","Double Suited","Single Suited","A-High Suit","Rainbow","Monotone","Broadway","Perfect Rundown","Double Gap Rundown"]
-            inc_tags = st.multiselect("✅ Include (AND)", avail_tags)
-            exc_tags = st.multiselect("🚫 Exclude (NOT)", avail_tags)
-            st.divider()
-            high_tags = st.multiselect("🎨 Highlight", avail_tags)
-            st.divider()
-            d_limit = st.slider("Display Limit", 5, 100, 20, 5)
+            inc_tags = st.multiselect("Include (AND)", avail_tags)
+            exc_tags = st.multiselect("Exclude (NOT)", avail_tags)
+            high_tags = st.multiselect("Highlight", avail_tags)
+            
+            d_limit = st.slider("List Limit", 5, 100, 20, 5)
 
             # Filtering Logic
             filtered_df = None
@@ -219,8 +227,8 @@ with tab_plo:
                     tmp = tmp[tmp["tags"].apply(lambda t: iset.issubset(set(t)) and eset.isdisjoint(set(t)))]
                 filtered_df = tmp
 
-            # Sidebar Results
-            st.write(f"Top {d_limit} Results:")
+            st.markdown("---")
+            st.write(f"**Results (Top {d_limit})**")
             if filtered_df is not None:
                 if not filtered_df.empty:
                     th = filtered_df.head(d_limit)
@@ -229,46 +237,61 @@ with tab_plo:
                         lbl = f"{r['hand']} (#{r['rank']})"
                         if high_tags and hset.issubset(set(r['tags'])): lbl = f"🎨 {lbl}"
                         if st.button(lbl, key=f"s_{r['rank']}"):
-                            st.session_state.plo_input = r['hand']; st.rerun()
+                            set_input_callback('plo_input', r['hand'])
+                            st.rerun()
                     st.caption(f"Found: {len(filtered_df):,}")
                 else: st.write("No hands found.")
             elif not (sel_top or inc_tags or exc_tags): st.write("(No filters)")
 
-        # Rank Search
-        with st.expander("🔍 Rank Search"):
-            c1, c2 = st.columns([1,3])
-            with c1: srk = st.number_input("Rank", 1, len(df_plo), 1, key="prk")
-            with c2:
+            st.divider()
+
+            # Rank Search (Moved to Sidebar)
+            st.header("2. 🔍 Rank Search")
+            c_rk1, c_rk2 = st.columns([1,2])
+            with c_rk1:
+                srk = st.number_input("Rank", 1, len(df_plo), 1, key="prk", label_visibility="collapsed")
+            with c_rk2:
                 fr = df_plo[df_plo['rank']==srk]
                 if not fr.empty:
                     r = fr.iloc[0]
-                    st.markdown(f"**{r['hand']}** (Top {r['pct']:.2f}%) Tags: {' '.join(r['tags'])}")
-                    if st.button("Analyze", key="bcp", on_click=set_input_callback, args=('plo_input', r['hand'])): pass
+                    # サイドバー内で分析ボタン
+                    if st.button("Analyze Rank", key="bcp"):
+                         set_input_callback('plo_input', r['hand'])
+                         st.rerun()
+                else: st.write("-")
+            
+            if not fr.empty:
+                st.caption(f"**{r['hand']}**")
+                st.caption(f"Top {r['pct']:.2f}%")
 
-        st.divider()
-        
-        # Scenario Setting
-        with st.container():
-            c_sc, _ = st.columns([1,2])
-            with c_sc:
-                spr = st.select_slider("Stack Depth / SPR", ["Short","Medium","Deep","Very Deep"], value="Medium")
-                nw = 0.0 if "Short" in spr else 0.3 if "Medium" in spr else 0.6 if "Deep" in spr else 0.8
+            st.divider()
+            
+            # Scenario Setting (Moved to Sidebar)
+            st.header("3. ⚙️ Scenario")
+            spr = st.select_slider("Stack Depth / SPR", ["Short","Medium","Deep","Very Deep"], value="Medium")
+            nw = 0.0 if "Short" in spr else 0.3 if "Medium" in spr else 0.6 if "Deep" in spr else 0.8
+            st.caption(f"Nut Weight: {nw*100:.0f}%")
 
-        st.divider()
 
-        # Input & Analysis Area
+        # ==========================================
+        # メインエリア: 入力と分析
+        # ==========================================
         c1, c2 = st.columns([1, 1.3])
         with c1:
             st.subheader("🔍 Hand Input")
             
-            # Selector & Text Input
-            sel_cards = render_card_selector('plo_input')
+            # Selector
+            render_card_selector('plo_input')
             
-            inp_raw = st.text_input("Enter Hand (Text)", key='plo_input_text', value=st.session_state.plo_input)
-            # Text input sync
+            # Text Input (with sync logic)
+            # key='plo_input_text' を使い、callbackでこれを更新することで同期ズレを防ぐ
+            inp_raw = st.text_input("Enter Hand (Text)", key='plo_input_text')
+            
+            # 入力値が変更されたらセッション変数を更新
             if inp_raw != st.session_state.plo_input:
                 st.session_state.plo_input = inp_raw
-                st.rerun()
+                # カードセレクター側の状態もリセットしたい場合はここで処理するが、
+                # Multiselectは一方向バインドに近いので複雑。今回はテキスト優先で処理。
 
             inp = normalize_input_text(st.session_state.plo_input)
             
@@ -386,7 +409,6 @@ with tab_plo:
 
                 ax2.scatter(mx, my, c='black', s=150, marker='*', ec='white', zorder=10)
                 
-                # Auto Zoom
                 if st.checkbox("🔍 Auto Zoom", True):
                     if not focused: xmin, xmax, ymin, ymax = bx.min(), bx.max(), by.min(), by.max()
                     if xmax==xmin: xmin-=0.1; xmax+=0.1
@@ -403,12 +425,11 @@ with tab_plo:
 with tab_flo8:
     st.header("⚖️ FLO8 Strategy")
     
-    # FLO8 Card Input (Visual + Text)
     sel8 = render_card_selector('flo8_input')
-    inp8_raw = st.text_input("FLO8 Hand", key='flo8_input_text', value=st.session_state.flo8_input)
+    inp8_raw = st.text_input("FLO8 Hand", key='flo8_input_text')
+    
     if inp8_raw != st.session_state.flo8_input:
         st.session_state.flo8_input = inp8_raw
-        st.rerun()
 
     i8 = normalize_input_text(st.session_state.flo8_input)
     if i8: st.markdown(render_hand_html(" ".join(i8)), unsafe_allow_html=True)
@@ -419,7 +440,7 @@ with tab_flo8:
             sc, dt = calculate_flo8_heuristic(" ".join(i8))
             st.metric("Hutchinson Points", sc, help="Target: 20+ to play")
             st.bar_chart(dt)
-        else: st.info("Enter 4 cards to see points.")
+        else: st.info("Enter 4 cards.")
 
     with c2:
         if df_flo8 is not None and len(i8)==4:
