@@ -237,47 +237,47 @@ with tab_plo:
         with c1:
             st.subheader("🔍 Hand Input")
             
-            # --- カード選択 (Multiselect) ---
-            # 全カードの選択肢リストを作成
-            suits_disp = {'s': '♠', 'h': '♥', 'd': '♦', 'c': '♣'}
-            all_cards_options = []
-            for rank in "AKQJT98765432":
-                for suit_code in "shdc":
-                    # 表示ラベル: "A♠" / 値: "As"
-                    label = f"{rank}{suits_disp[suit_code]}"
-                    value = f"{rank}{suit_code}"
-                    all_cards_options.append((label, value))
+            # --- スート別入力 (4カラムレイアウト) ---
+            # 視認性を高めるため、Markdownで色付きヘッダーを表示しつつMultiselectを配置
             
-            # 選択肢ラベルのリスト
-            options_labels = [opt[0] for opt in all_cards_options]
+            ranks_list = list("AKQJT98765432")
             
-            # マルチセレクト表示
-            selected_labels = st.multiselect(
-                "🃏 Select Cards (Searchable)",
-                options=options_labels,
-                max_selections=4,
-                placeholder="Choose 4 cards...",
-                help="Type to search (e.g. 'As', 'K'). Select exactly 4 cards."
-            )
+            col_s, col_h, col_d, col_c = st.columns(4)
             
-            # 選択されたラベルを内部値(As, Kh...)に変換
-            if len(selected_labels) == 4:
-                selected_values = []
-                for label in selected_labels:
-                    # label ("A♠") から value ("As") を逆引き
-                    val = next(opt[1] for opt in all_cards_options if opt[0] == label)
-                    selected_values.append(val)
-                
-                # 自動的に入力欄を更新
-                # 注意: multiselectの結果を優先して表示するため、テキスト入力を上書きするロジック
-                current_visual_input = " ".join(selected_values)
-                # 入力欄のデフォルト値を更新するためにsession_state操作はしない(ループするため)
-                # 代わりに分析用の変数 `inp` をここで決定する
-                inp = selected_values
-                st.session_state.plo_input = current_visual_input # 同期
+            with col_s:
+                st.markdown("**:black[♠ Spades]**")
+                sel_s = st.multiselect("Spades", ranks_list, key="ms_s", label_visibility="collapsed")
+            with col_h:
+                st.markdown("**:red[♥ Hearts]**")
+                sel_h = st.multiselect("Hearts", ranks_list, key="ms_h", label_visibility="collapsed")
+            with col_d:
+                st.markdown("**:blue[♦ Diamonds]**")
+                sel_d = st.multiselect("Diamonds", ranks_list, key="ms_d", label_visibility="collapsed")
+            with col_c:
+                st.markdown("**:green[♣ Clubs]**")
+                sel_c = st.multiselect("Clubs", ranks_list, key="ms_c", label_visibility="collapsed")
+
+            # 4つのリストを統合してハンドを作成
+            # 値は "As", "Kh" などの形式に変換
+            collected_cards = []
+            for r in sel_s: collected_cards.append(f"{r}s")
+            for r in sel_h: collected_cards.append(f"{r}h")
+            for r in sel_d: collected_cards.append(f"{r}d")
+            for r in sel_c: collected_cards.append(f"{r}c")
+
+            # 統合ハンドの検証
+            inp = []
+            if len(collected_cards) == 4:
+                # 4枚揃ったら優先して採用
+                inp = collected_cards
+                # テキストボックスとも同期（見かけ上）
+                st.session_state.plo_input = " ".join(collected_cards)
+            elif len(collected_cards) > 0:
+                # 途中ならメッセージ
+                st.caption(f"Selected: {len(collected_cards)}/4 cards. Please pick exactly 4.")
             else:
-                # マルチセレクトが4枚未満なら、テキストボックスの入力を採用
-                inp_raw = st.text_input("Enter Hand (Text)", key='plo_input')
+                # 何も選んでなければテキストボックスの値を採用
+                inp_raw = st.text_input("Or Enter Text Manually", key='plo_input')
                 inp = normalize_input_text(inp_raw)
 
             # 現在のハンドを表示
@@ -301,8 +301,6 @@ with tab_plo:
                     st.write("🏷️ " + " ".join([f"`{t}`" for t in row['tags']]))
                     st.caption(f"Global Rank: {int(row['rank']):,} (Top {row['pct']:.1f}%)")
                 else: st.warning("Hand not found.")
-            elif len(selected_labels) > 0 and len(selected_labels) < 4:
-                st.info(f"Select {4 - len(selected_labels)} more cards.")
 
         with c2:
             if 'row' in locals():
