@@ -8,7 +8,7 @@ from heuristics import calculate_flo8_heuristic
 # ==========================================
 # 1. Config & Styles
 # ==========================================
-st.set_page_config(page_title="Omaha Ultimate Solver", layout="wide")
+st.set_page_config(page_title="Omaha Hand Analyzer", layout="wide")
 
 # ==========================================
 # 2. Helper Classes & Functions
@@ -92,18 +92,13 @@ def get_hand_tags(hand_str):
         if min(ranks)>=8: tags.append("Broadway")
     return tags
 
-# 【修正】ボタン押下時にカードセレクターの状態もリセットする関数
 def set_input_callback(target_key, value):
-    # 1. メインの入力値を更新
     st.session_state[target_key] = value
-    
-    # 2. テキストボックスのウィジェット状態も同期
     widget_key = f"{target_key}_text"
     if widget_key in st.session_state:
         st.session_state[widget_key] = value
     
-    # 3. 【重要】カードセレクター(Multiselect)の状態をクリアする
-    # これをしないと、古い選択状態が残ってしまい、即座に上書きされてしまう
+    # カードセレクターのリセット
     for suit in ['s', 'h', 'd', 'c']:
         ms_key = f"ms_{suit}_{target_key}"
         if ms_key in st.session_state:
@@ -183,7 +178,7 @@ def render_card_selector(session_key):
 # ==========================================
 # 5. Main Application Logic
 # ==========================================
-st.title("🃏 Omaha Ultimate Solver")
+st.title("🃏 Omaha Hand Analyzer")
 
 if 'plo_input' not in st.session_state: st.session_state.plo_input = "As Ks Jd Th"
 if 'flo8_input' not in st.session_state: st.session_state.flo8_input = "Ad Ah 2s 3d"
@@ -205,24 +200,46 @@ if game_mode == "PLO (High Only)":
     if df_plo is None:
         st.warning("Data loading failed. Please upload 'plo_detailed_ranking.zip'.")
     else:
-        # --- PLO Sidebar (Improved Layout) ---
+        # --- PLO Sidebar (Reordered) ---
         with st.sidebar:
-            # 1. Filters (Collapsible, Default Open)
-            with st.expander("1. 🏷️ Filter Conditions", expanded=True):
-                ranks_opt = list("AKQJT98765432")
-                sel_top = st.multiselect("Top Rank", ranks_opt)
-                
-                avail_tags = ["AA","KK","QQ","Double Pair","Double Suited","Single Suited","A-High Suit","Rainbow","Monotone","Broadway","Perfect Rundown","Double Gap Rundown"]
-                inc_tags = st.multiselect("Include", avail_tags)
-                exc_tags = st.multiselect("Exclude", avail_tags)
+            
+            # 1. Scenario
+            with st.expander("1. ⚙️ Scenario", expanded=False):
+                spr = st.select_slider("Stack Depth / SPR", ["Short","Medium","Deep","Very Deep"], value="Medium")
+                nw = 0.0 if "Short" in spr else 0.3 if "Medium" in spr else 0.6 if "Deep" in spr else 0.8
+                st.caption(f"Nut Weight: {nw*100:.0f}%")
 
-            # 2. Highlight (Collapsible, Default Closed)
-            with st.expander("2. 🎨 Highlight Groups", expanded=False):
+            # 2. Hand Rank
+            with st.expander("2. 🔍 Hand Rank", expanded=False):
+                c_rk1, c_rk2 = st.columns([1,2])
+                with c_rk1:
+                    srk = st.number_input("Rank", 1, len(df_plo), 1, key="prk_plo", label_visibility="collapsed")
+                with c_rk2:
+                    fr = df_plo[df_plo['rank']==srk]
+                    if not fr.empty:
+                        r = fr.iloc[0]
+                        if st.button("Analyze", key="bcp_plo"):
+                             set_input_callback('plo_input', r['hand'])
+                             st.rerun()
+                    else: st.write("-")
+                if not fr.empty:
+                    st.caption(f"**{r['hand']}** (Top {r['pct']:.2f}%)")
+
+            # 3. Highlights
+            avail_tags = ["AA","KK","QQ","Double Pair","Double Suited","Single Suited","A-High Suit","Rainbow","Monotone","Broadway","Perfect Rundown","Double Gap Rundown"]
+            with st.expander("3. 🎨 Highlights", expanded=False):
                 hl_tags_1 = st.multiselect("Group 1 (🔴 Red)", avail_tags, key="hl1")
                 hl_tags_2 = st.multiselect("Group 2 (🔵 Blue)", avail_tags, key="hl2")
                 hl_tags_3 = st.multiselect("Group 3 (🟢 Green)", avail_tags, key="hl3")
 
-            # 3. Results List
+            # 4. Filter (Default Open)
+            with st.expander("4. 🏷️ Filter", expanded=True):
+                ranks_opt = list("AKQJT98765432")
+                sel_top = st.multiselect("Top Rank", ranks_opt)
+                inc_tags = st.multiselect("Include", avail_tags)
+                exc_tags = st.multiselect("Exclude", avail_tags)
+
+            # Results List
             st.divider()
             d_limit = st.slider("List Limit", 5, 100, 20, 5)
 
@@ -255,30 +272,6 @@ if game_mode == "PLO (High Only)":
                     st.caption(f"Found: {len(filtered_df):,}")
                 else: st.write("No hands found.")
             elif not (sel_top or inc_tags or exc_tags): st.write("(No filters)")
-
-            st.divider()
-
-            # 4. Rank Search
-            with st.expander("3. 🔍 Rank Search", expanded=False):
-                c_rk1, c_rk2 = st.columns([1,2])
-                with c_rk1:
-                    srk = st.number_input("Rank", 1, len(df_plo), 1, key="prk_plo", label_visibility="collapsed")
-                with c_rk2:
-                    fr = df_plo[df_plo['rank']==srk]
-                    if not fr.empty:
-                        r = fr.iloc[0]
-                        if st.button("Analyze", key="bcp_plo"):
-                             set_input_callback('plo_input', r['hand'])
-                             st.rerun()
-                    else: st.write("-")
-                if not fr.empty:
-                    st.caption(f"**{r['hand']}** (Top {r['pct']:.2f}%)")
-
-            # 5. Scenario
-            with st.expander("4. ⚙️ Scenario", expanded=False):
-                spr = st.select_slider("Stack Depth / SPR", ["Short","Medium","Deep","Very Deep"], value="Medium")
-                nw = 0.0 if "Short" in spr else 0.3 if "Medium" in spr else 0.6 if "Deep" in spr else 0.8
-                st.caption(f"Nut Weight: {nw*100:.0f}%")
 
         # --- PLO MAIN ---
         st.header("🔥 PLO Strategy")
@@ -345,7 +338,6 @@ if game_mode == "PLO (High Only)":
                     st.markdown(render_hand_html(s_row['hand']), unsafe_allow_html=True)
                     st.caption(f"Eq: {s_row['equity']*100:.1f}%")
                 with sk2:
-                    # Keyにseek_pctを含めることで、スライダー変更時にボタンを再生成し、引数を確実に更新する
                     st.button("Analyze", key=f"b_seek_plo_{seek_pct}", on_click=set_input_callback, args=('plo_input', s_row['hand']))
                 
                 scurve = df_plo.iloc[::200, :]
@@ -432,7 +424,7 @@ if game_mode == "PLO (High Only)":
 elif game_mode == "FLO8 (Hi/Lo)":
     with st.sidebar:
         # 1. Rank Search
-        with st.expander("1. 🔍 Rank Search", expanded=True):
+        with st.expander("1. 🔍 Hand Rank", expanded=True):
             if df_flo8 is not None:
                 c_rk8_1, c_rk8_2 = st.columns([1,2])
                 with c_rk8_1:
@@ -479,7 +471,7 @@ elif game_mode == "FLO8 (Hi/Lo)":
             else: st.warning("Not found.")
 
 elif game_mode == "Guide":
-    st.header("📖 Omaha Ultimate Solver 取扱説明書")
+    st.header("📖 Omaha Hand Analyzer 取扱説明書")
     
     st.markdown("""
     このツールは、**Pot Limit Omaha (PLO)** および **Fixed Limit Omaha Hi/Lo (FLO8)** のハンド強度を、
@@ -551,15 +543,15 @@ elif game_mode == "Guide":
 
     st.subheader("4. サイドバー機能 (便利ツール)")
     st.markdown("""
-    - **🏷️ Filters (PLOのみ)** 「Aハイのみ」「ダブルスーテッドのみ」など、条件を絞ってランキングを表示します。
-      
-    - **🎨 Highlight Groups (PLOのみ)** 3つのグループ（🔴赤、🔵青、🟢緑）にそれぞれ違う条件を設定し、散布図上で色分け表示できます。
-      
-    - **🔍 Rank Search** 「1位のハンドは？」「1000位のハンドは？」など、順位からハンドを逆引きして分析ボタンでセットできます。
-      
     - **⚙️ Scenario (SPR設定)** スタックの深さを設定します。
       - **Deep**: ナッツを作る能力（Nut Equity）を重視します。
       - **Short**: 単純な勝率（Raw Equity）を重視します。
+      
+    - **🔍 Hand Rank** 「1位のハンドは？」「1000位のハンドは？」など、順位からハンドを逆引きして分析ボタンでセットできます。
+      
+    - **🎨 Highlights (PLOのみ)** 3つのグループ（🔴赤、🔵青、🟢緑）にそれぞれ違う条件を設定し、散布図上で色分け表示できます。
+      
+    - **🏷️ Filter (PLOのみ)** 「Aハイのみ」「ダブルスーテッドのみ」など、条件を絞ってランキングを表示します。
     """)
     
     st.success("Analysis powered by custom simulation engine.")
