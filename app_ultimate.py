@@ -237,49 +237,53 @@ with tab_plo:
         with c1:
             st.subheader("🔍 Hand Input")
             
-            # --- スート別入力 (4カラムレイアウト) ---
-            # 視認性を高めるため、Markdownで色付きヘッダーを表示しつつMultiselectを配置
-            
-            ranks_list = list("AKQJT98765432")
-            
-            col_s, col_h, col_d, col_c = st.columns(4)
-            
-            with col_s:
-                st.markdown("**:black[♠ Spades]**")
-                sel_s = st.multiselect("Spades", ranks_list, key="ms_s", label_visibility="collapsed")
-            with col_h:
-                st.markdown("**:red[♥ Hearts]**")
-                sel_h = st.multiselect("Hearts", ranks_list, key="ms_h", label_visibility="collapsed")
-            with col_d:
-                st.markdown("**:blue[♦ Diamonds]**")
-                sel_d = st.multiselect("Diamonds", ranks_list, key="ms_d", label_visibility="collapsed")
-            with col_c:
-                st.markdown("**:green[♣ Clubs]**")
-                sel_c = st.multiselect("Clubs", ranks_list, key="ms_c", label_visibility="collapsed")
+            # 【変更】折りたたみ式＆色修正
+            with st.expander("🃏 Open Card Selector (by Suit)", expanded=False):
+                ranks_list = list("AKQJT98765432")
+                
+                col_s, col_h, col_d, col_c = st.columns(4)
+                
+                with col_s:
+                    st.markdown("**♠ Spades**") # 色指定削除（標準色）
+                    sel_s = st.multiselect("Spades", ranks_list, key="ms_s", label_visibility="collapsed")
+                with col_h:
+                    st.markdown("**:red[♥ Hearts]**")
+                    sel_h = st.multiselect("Hearts", ranks_list, key="ms_h", label_visibility="collapsed")
+                with col_d:
+                    st.markdown("**:blue[♦ Diamonds]**")
+                    sel_d = st.multiselect("Diamonds", ranks_list, key="ms_d", label_visibility="collapsed")
+                with col_c:
+                    st.markdown("**:green[♣ Clubs]**")
+                    sel_c = st.multiselect("Clubs", ranks_list, key="ms_c", label_visibility="collapsed")
 
-            # 4つのリストを統合してハンドを作成
-            # 値は "As", "Kh" などの形式に変換
-            collected_cards = []
-            for r in sel_s: collected_cards.append(f"{r}s")
-            for r in sel_h: collected_cards.append(f"{r}h")
-            for r in sel_d: collected_cards.append(f"{r}d")
-            for r in sel_c: collected_cards.append(f"{r}c")
+                # 4つのリストを統合
+                collected_cards = []
+                for r in sel_s: collected_cards.append(f"{r}s")
+                for r in sel_h: collected_cards.append(f"{r}h")
+                for r in sel_d: collected_cards.append(f"{r}d")
+                for r in sel_c: collected_cards.append(f"{r}c")
 
-            # 統合ハンドの検証
-            inp = []
-            if len(collected_cards) == 4:
-                # 4枚揃ったら優先して採用
-                inp = collected_cards
-                # テキストボックスとも同期（見かけ上）
-                st.session_state.plo_input = " ".join(collected_cards)
-            elif len(collected_cards) > 0:
-                # 途中ならメッセージ
-                st.caption(f"Selected: {len(collected_cards)}/4 cards. Please pick exactly 4.")
-            else:
-                # 何も選んでなければテキストボックスの値を採用
-                inp_raw = st.text_input("Or Enter Text Manually", key='plo_input')
-                inp = normalize_input_text(inp_raw)
+                inp = []
+                if len(collected_cards) == 4:
+                    inp = collected_cards
+                    st.session_state.plo_input = " ".join(collected_cards)
+                elif len(collected_cards) > 0:
+                    st.caption(f"Selected: {len(collected_cards)}/4 cards.")
+                else:
+                    # 未選択時はテキスト入力を優先
+                    inp_raw = st.text_input("Or Enter Text Manually", key='plo_input')
+                    inp = normalize_input_text(inp_raw)
 
+            # 折りたたまれている時に、ここでもテキスト入力できるようにしておく
+            if not inp and 'collected_cards' in locals() and len(collected_cards) == 0:
+                 # すでにExpander内でtext_inputが出ている場合は重複しないよう制御が必要だが
+                 # Streamlitの仕様上、Expander内と外で条件分岐して表示する
+                 pass
+            
+            # Expanderを使っていない（閉じていて何も選んでいない）場合のための予備テキスト入力
+            # ただし session_state のキー重複エラーを避けるため、
+            # 上記ロジックで「Expander内で何も選んでいない時」にテキスト入力を出している。
+            
             # 現在のハンドを表示
             if inp:
                 st.markdown(render_hand_html(" ".join(inp)), unsafe_allow_html=True)
