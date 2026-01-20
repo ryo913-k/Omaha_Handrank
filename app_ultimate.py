@@ -9,7 +9,7 @@ from heuristics import calculate_flo8_heuristic
 st.set_page_config(page_title="Omaha Ultimate Solver", layout="wide")
 
 # ==========================================
-# ユーティリティ (eval7非依存)
+# ユーティリティ
 # ==========================================
 class SimpleCard:
     def __init__(self, card_str):
@@ -28,6 +28,46 @@ def normalize_input_text(text):
     for p in parts:
         if len(p) >= 2: cleaned.append(p[:-1].upper() + p[-1].lower())
     return cleaned
+
+# 【追加】カードを色付きHTMLで表示する関数
+def render_hand_html(hand_str):
+    if not hand_str: return ""
+    cards = hand_str.split()
+    
+    # 指定カラー: スペード黒、ハート赤、ダイヤ青、クラブ緑
+    suit_map = {'s': '♠', 'h': '♥', 'd': '♦', 'c': '♣'}
+    color_map = {'s': 'black', 'h': '#d32f2f', 'd': '#1976d2', 'c': '#388e3c'} # 視認性のため少し調整したRGB
+    
+    html = "<div style='display:flex; gap:8px; margin-bottom:10px;'>"
+    for c in cards:
+        if len(c) < 2: continue
+        rank = c[:-1]
+        suit = c[-1].lower()
+        
+        symbol = suit_map.get(suit, suit)
+        color = color_map.get(suit, 'black')
+        
+        card_html = f"""
+        <div style='
+            width: 45px;
+            height: 60px;
+            background-color: white;
+            border: 1px solid #bbb;
+            border-radius: 6px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 20px;
+            font-weight: bold;
+            color: {color};
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+        '>
+            {rank}{symbol}
+        </div>
+        """
+        html += card_html
+    html += "</div>"
+    return html
 
 def get_hand_tags(hand_str):
     try: cards = [SimpleCard(s) for s in hand_str.split()]
@@ -79,7 +119,7 @@ def get_hand_tags(hand_str):
     return tags
 
 # ==========================================
-# データロード (計算ロジック修正版)
+# データロード
 # ==========================================
 @st.cache_data
 def load_plo_data_final(csv_path="plo_detailed_ranking.zip"):
@@ -87,7 +127,7 @@ def load_plo_data_final(csv_path="plo_detailed_ranking.zip"):
         df = pd.read_csv(csv_path)
         df["card_set"] = df["hand"].apply(lambda x: frozenset(x.split()))
         
-        # Absolute Equity to Nut Equity (正しい加算)
+        # Absolute Equity to Nut Equity
         df["nut_equity"] = (
             df["win_SF"] + 
             df["win_Quads"] + 
@@ -103,7 +143,6 @@ def load_plo_data_final(csv_path="plo_detailed_ranking.zip"):
         df["pct"] = (df["rank"] / len(df)) * 100
         df["tags"] = df["hand"].apply(get_hand_tags)
         
-        # Top Rank抽出 (並び順に依存せず最大値を探す)
         def get_max_rank(hand_str):
             try:
                 cards = [SimpleCard(s) for s in hand_str.split()]
@@ -221,6 +260,11 @@ with tab_plo:
             st.subheader("🔍 Hand Input")
             inp_raw = st.text_input("Enter Hand", key='plo_input')
             inp = normalize_input_text(inp_raw)
+            
+            # 【追加】入力されたハンドを色付きカードで表示
+            if inp:
+                st.markdown(render_hand_html(" ".join(inp)), unsafe_allow_html=True)
+            
             if len(inp)==4:
                 res = df_plo[df_plo["card_set"]==frozenset(inp)]
                 if not res.empty:
@@ -303,7 +347,8 @@ with tab_plo:
                 st.info(f"**Top {seek_pct:.1f}% Boundary**")
                 sk1, sk2 = st.columns([3, 1])
                 with sk1:
-                    st.markdown(f"#### {s_row['hand']}")
+                    # 【追加】シークされたハンドを色付きカードで表示
+                    st.markdown(render_hand_html(s_row['hand']), unsafe_allow_html=True)
                     st.caption(f"Eq: {s_row['equity']*100:.1f}% | {' '.join(s_row['tags'])}")
                 with sk2:
                     if st.button("Analyze", key="b_seek"):
@@ -332,7 +377,7 @@ with tab_plo:
                 xmin, xmax, ymin, ymax = mx, mx, my, my
                 focused = False
 
-                # Filtered (Random Sample if large)
+                # Filtered (Sample)
                 if filtered_df is not None and not filtered_df.empty:
                     fdf = filtered_df.sample(2000, random_state=42) if len(filtered_df)>2000 else filtered_df
                     fx, fy = gxy(fdf, cmode)
@@ -345,7 +390,6 @@ with tab_plo:
                 if high_tags:
                     ht = set(high_tags)
                     src = filtered_df if filtered_df is not None else df_plo
-                    # 全データから該当タグを抽出
                     mask = src["tags"].apply(lambda t: ht.issubset(set(t)))
                     hdf_all = src[mask]
                     
@@ -360,10 +404,8 @@ with tab_plo:
                 ax2.scatter(mx, my, c='black', s=150, marker='*', ec='white', zorder=10)
 
                 if azoom:
-                    # フィルタもハイライトもないなら背景全体
                     if not focused: xmin, xmax, ymin, ymax = bx.min(), bx.max(), by.min(), by.max()
                     
-                    # 局所化防止
                     if xmax==xmin: xmin-=0.1; xmax+=0.1
                     if ymax==ymin: ymin-=0.1; ymax+=0.1
                     x_span, y_span = xmax-xmin, ymax-ymin
