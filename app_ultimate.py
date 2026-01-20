@@ -93,7 +93,6 @@ def get_hand_tags(hand_str):
     return tags
 
 def set_input_callback(target_key, value):
-    """ボタン押下時にセッションと入力を強制同期"""
     st.session_state[target_key] = value
     widget_key = f"{target_key}_text"
     if widget_key in st.session_state:
@@ -160,11 +159,10 @@ def render_card_selector(session_key):
 
         if len(collected) == 4:
             final_hand = " ".join(collected)
-            # 現在値と異なれば更新
             if st.session_state.get(session_key) != final_hand:
                 st.session_state[session_key] = final_hand
                 st.session_state[f"{session_key}_text"] = final_hand
-                st.rerun() # 即時反映
+                st.rerun()
             return collected
         elif len(collected) > 0:
             st.caption(f"Selected: {len(collected)}/4 cards.")
@@ -176,7 +174,6 @@ def render_card_selector(session_key):
 # ==========================================
 st.title("🃏 Omaha Ultimate Solver")
 
-# Init Session State
 if 'plo_input' not in st.session_state: st.session_state.plo_input = "As Ks Jd Th"
 if 'flo8_input' not in st.session_state: st.session_state.flo8_input = "Ad Ah 2s 3d"
 if 'plo_input_text' not in st.session_state: st.session_state.plo_input_text = st.session_state.plo_input
@@ -185,9 +182,6 @@ if 'flo8_input_text' not in st.session_state: st.session_state.flo8_input_text =
 df_plo = load_plo_data()
 df_flo8 = load_flo8_data()
 
-# ==========================================
-# サイドバーによるモード切替 (これでサイドバーを分離)
-# ==========================================
 with st.sidebar:
     st.title("Navigation")
     game_mode = st.radio("Game Mode", ["PLO (High Only)", "FLO8 (Hi/Lo)", "Guide"], label_visibility="collapsed")
@@ -200,7 +194,6 @@ if game_mode == "PLO (High Only)":
     if df_plo is None:
         st.warning("Data loading failed. Please upload 'plo_detailed_ranking.zip'.")
     else:
-        # --- PLO SIDEBAR CONTENT ---
         with st.sidebar:
             st.subheader("1. 🏷️ Filters (PLO)")
             ranks_opt = list("AKQJT98765432")
@@ -209,7 +202,13 @@ if game_mode == "PLO (High Only)":
             avail_tags = ["AA","KK","QQ","Double Pair","Double Suited","Single Suited","A-High Suit","Rainbow","Monotone","Broadway","Perfect Rundown","Double Gap Rundown"]
             inc_tags = st.multiselect("Include", avail_tags)
             exc_tags = st.multiselect("Exclude", avail_tags)
-            high_tags = st.multiselect("Highlight", avail_tags)
+            
+            # 【変更】ハイライトを3グループに分割
+            st.markdown("##### 🎨 Highlight Groups")
+            hl_tags_1 = st.multiselect("Group 1 (🔴 Red)", avail_tags, key="hl1")
+            hl_tags_2 = st.multiselect("Group 2 (🔵 Blue)", avail_tags, key="hl2")
+            hl_tags_3 = st.multiselect("Group 3 (🟢 Green)", avail_tags, key="hl3")
+            
             d_limit = st.slider("List Limit", 5, 100, 20, 5)
 
             filtered_df = None
@@ -225,10 +224,22 @@ if game_mode == "PLO (High Only)":
             if filtered_df is not None:
                 if not filtered_df.empty:
                     th = filtered_df.head(d_limit)
-                    hset = set(high_tags)
+                    
+                    # Highlight Sets
+                    hset1 = set(hl_tags_1)
+                    hset2 = set(hl_tags_2)
+                    hset3 = set(hl_tags_3)
+                    
                     for _, r in th.iterrows():
-                        lbl = f"{r['hand']} (#{r['rank']})"
-                        if high_tags and hset.issubset(set(r['tags'])): lbl = f"🎨 {lbl}"
+                        rtags = set(r['tags'])
+                        prefix = ""
+                        # マーカー付与
+                        if hl_tags_1 and hset1.issubset(rtags): prefix += "🔴"
+                        if hl_tags_2 and hset2.issubset(rtags): prefix += "🔵"
+                        if hl_tags_3 and hset3.issubset(rtags): prefix += "🟢"
+                        
+                        lbl = f"{prefix} {r['hand']} (#{r['rank']})"
+                        
                         if st.button(lbl, key=f"s_{r['rank']}"):
                             set_input_callback('plo_input', r['hand'])
                             st.rerun()
@@ -238,11 +249,10 @@ if game_mode == "PLO (High Only)":
 
             st.divider()
 
-            # Rank Search (PLO)
+            # Rank Search
             st.subheader("2. 🔍 Rank Search (PLO)")
             c_rk1, c_rk2 = st.columns([1,2])
             with c_rk1:
-                # keyを一意にする
                 srk = st.number_input("Rank", 1, len(df_plo), 1, key="prk_plo", label_visibility="collapsed")
             with c_rk2:
                 fr = df_plo[df_plo['rank']==srk]
@@ -252,19 +262,15 @@ if game_mode == "PLO (High Only)":
                          set_input_callback('plo_input', r['hand'])
                          st.rerun()
                 else: st.write("-")
-            
             if not fr.empty:
-                st.caption(f"**{r['hand']}**")
-                st.caption(f"Top {r['pct']:.2f}%")
+                st.caption(f"**{r['hand']}** (Top {r['pct']:.2f}%)")
 
             st.divider()
-            
             st.subheader("3. ⚙️ Scenario")
             spr = st.select_slider("Stack Depth / SPR", ["Short","Medium","Deep","Very Deep"], value="Medium")
             nw = 0.0 if "Short" in spr else 0.3 if "Medium" in spr else 0.6 if "Deep" in spr else 0.8
-            st.caption(f"Nut Weight: {nw*100:.0f}%")
 
-        # --- PLO MAIN CONTENT ---
+        # --- PLO MAIN ---
         st.header("🔥 PLO Strategy")
         c1, c2 = st.columns([1, 1.3])
         with c1:
@@ -272,8 +278,7 @@ if game_mode == "PLO (High Only)":
             render_card_selector('plo_input')
             
             inp_raw = st.text_input("Enter Hand (Text)", key='plo_input_text')
-            if inp_raw != st.session_state.plo_input:
-                st.session_state.plo_input = inp_raw
+            if inp_raw != st.session_state.plo_input: st.session_state.plo_input = inp_raw
 
             inp = normalize_input_text(st.session_state.plo_input)
             if inp: st.markdown(render_hand_html(" ".join(inp)), unsafe_allow_html=True)
@@ -291,7 +296,7 @@ if game_mode == "PLO (High Only)":
                     m3.metric("Nut Equity", f"{ne:.1f}%")
                     st.write("🏷️ " + " ".join([f"`{t}`" for t in row['tags']]))
                     st.caption(f"Rank: {int(row['rank']):,} (Top {row['pct']:.1f}%)")
-                else: st.warning("Hand not found in database.")
+                else: st.warning("Hand not found.")
 
         with c2:
             if 'row' in locals():
@@ -339,7 +344,6 @@ if game_mode == "PLO (High Only)":
                 ax3.scatter(s_row["pct"], s_row["equity"], c="blue", s=80, zorder=9, label="Seek")
                 ax3.axvline(x=seek_pct, color="blue", ls=":", alpha=0.5)
                 ax3.set_xlabel("Top X%"); ax3.set_ylabel("Equity")
-                ax3.legend()
                 st.pyplot(fig3)
 
             with cc2:
@@ -357,39 +361,67 @@ if game_mode == "PLO (High Only)":
                 bx, by = gxy(bg, cmode)
                 mx, my = gxy(pd.DataFrame([row]), cmode); mx, my = mx.iloc[0], my.iloc[0]
                 cbg = bg["nut_quality"] if "Mode A" in cmode else (1.0-(bx-by))
-                ax2.scatter(bx, by, c=cbg, cmap="coolwarm_r", s=10, alpha=0.1)
+                ax2.scatter(bx, by, c=cbg, cmap="coolwarm_r", s=10, alpha=0.1, label='Others')
                 if "Mode B" in cmode: ax2.plot([0,1],[0,1], ls="--", c="gray", alpha=0.5)
 
-                # Filtered & Highlighted
+                # Filtered (Gold)
                 if filtered_df is not None and not filtered_df.empty:
                     fdf = filtered_df.sample(2000, random_state=42) if len(filtered_df)>2000 else filtered_df
                     fx, fy = gxy(fdf, cmode)
-                    ax2.scatter(fx, fy, fc='none', ec='gold', s=30)
+                    ax2.scatter(fx, fy, fc='none', ec='gold', s=30, label='Filtered')
                 
-                if high_tags:
-                    ht = set(high_tags)
-                    mask = (filtered_df if filtered_df is not None else df_plo)["tags"].apply(lambda t: ht.issubset(set(t)))
-                    hdf_all = (filtered_df if filtered_df is not None else df_plo)[mask]
-                    if not hdf_all.empty:
-                        hdf = hdf_all.sample(2000, random_state=42) if len(hdf_all)>2000 else hdf_all
-                        hx, hy = gxy(hdf, cmode)
-                        ax2.scatter(hx, hy, fc='none', ec='#FF00FF', s=60, lw=2)
+                # 【変更】3グループのハイライト描画 (凡例付き)
+                # Group 1 (Red)
+                if hl_tags_1:
+                    src = filtered_df if filtered_df is not None else df_plo
+                    ht = set(hl_tags_1)
+                    mask = src["tags"].apply(lambda t: ht.issubset(set(t)))
+                    hdf = src[mask]
+                    if not hdf.empty:
+                        hdf_s = hdf.sample(2000, random_state=42) if len(hdf)>2000 else hdf
+                        hx, hy = gxy(hdf_s, cmode)
+                        # ラベルを短縮表示
+                        label_text = f"Grp1(Red): {','.join(hl_tags_1)[:15]}.."
+                        ax2.scatter(hx, hy, fc='none', ec='crimson', s=50, lw=1.5, label=label_text)
 
-                ax2.scatter(mx, my, c='black', s=150, marker='*', ec='white', zorder=10)
+                # Group 2 (Blue)
+                if hl_tags_2:
+                    src = filtered_df if filtered_df is not None else df_plo
+                    ht = set(hl_tags_2)
+                    mask = src["tags"].apply(lambda t: ht.issubset(set(t)))
+                    hdf = src[mask]
+                    if not hdf.empty:
+                        hdf_s = hdf.sample(2000, random_state=42) if len(hdf)>2000 else hdf
+                        hx, hy = gxy(hdf_s, cmode)
+                        label_text = f"Grp2(Blue): {','.join(hl_tags_2)[:15]}.."
+                        ax2.scatter(hx, hy, fc='none', ec='dodgerblue', s=50, lw=1.5, label=label_text)
+
+                # Group 3 (Green)
+                if hl_tags_3:
+                    src = filtered_df if filtered_df is not None else df_plo
+                    ht = set(hl_tags_3)
+                    mask = src["tags"].apply(lambda t: ht.issubset(set(t)))
+                    hdf = src[mask]
+                    if not hdf.empty:
+                        hdf_s = hdf.sample(2000, random_state=42) if len(hdf)>2000 else hdf
+                        hx, hy = gxy(hdf_s, cmode)
+                        label_text = f"Grp3(Grn): {','.join(hl_tags_3)[:15]}.."
+                        ax2.scatter(hx, hy, fc='none', ec='limegreen', s=50, lw=1.5, label=label_text)
+
+                ax2.scatter(mx, my, c='black', s=150, marker='*', ec='white', zorder=10, label='You')
                 ax2.grid(True, ls='--', alpha=0.3)
+                ax2.legend(fontsize=8, loc='upper left')
                 st.pyplot(fig2)
 
 # ==========================================
 # MODE: FLO8
 # ==========================================
 elif game_mode == "FLO8 (Hi/Lo)":
-    # --- FLO8 SIDEBAR CONTENT ---
     with st.sidebar:
         st.subheader("1. 🔍 Rank Search (FLO8)")
         if df_flo8 is not None:
             c_rk8_1, c_rk8_2 = st.columns([1,2])
             with c_rk8_1:
-                # PLOとキーが被らないように変更
                 srk8 = st.number_input("Rank", 1, len(df_flo8), 1, key="prk_flo8", label_visibility="collapsed")
             with c_rk8_2:
                 fr8 = df_flo8[df_flo8['rank']==srk8]
@@ -399,21 +431,15 @@ elif game_mode == "FLO8 (Hi/Lo)":
                          set_input_callback('flo8_input', r8_found['hand'])
                          st.rerun()
                 else: st.write("-")
-            
             if not fr8.empty:
-                st.caption(f"**{r8_found['hand']}**")
-                st.caption(f"Top {r8_found['pct_total']:.2f}%")
-        else:
-            st.write("Data not loaded")
+                st.caption(f"**{r8_found['hand']}** (Top {r8_found['pct_total']:.2f}%)")
+        else: st.write("Data not loaded")
 
-    # --- FLO8 MAIN CONTENT ---
     st.header("⚖️ FLO8 Strategy")
-    
     render_card_selector('flo8_input')
     inp8_raw = st.text_input("FLO8 Hand (Text)", key='flo8_input_text')
     
-    if inp8_raw != st.session_state.flo8_input:
-        st.session_state.flo8_input = inp8_raw
+    if inp8_raw != st.session_state.flo8_input: st.session_state.flo8_input = inp8_raw
 
     i8 = normalize_input_text(st.session_state.flo8_input)
     if i8: st.markdown(render_hand_html(" ".join(i8)), unsafe_allow_html=True)
@@ -436,23 +462,12 @@ elif game_mode == "FLO8 (Hi/Lo)":
                 m2.metric("High Eq", f"{rr['high_equity']:.1f}%")
                 m3.metric("Low Eq", f"{rr['low_equity']:.1f}%")
                 st.caption(f"Rank: #{rr['rank']} (Top {rr['pct_total']:.1f}%)")
-            else: st.warning("Not found in ranking db.")
+            else: st.warning("Not found.")
 
-# ==========================================
-# MODE: Guide
-# ==========================================
 elif game_mode == "Guide":
     st.header("📖 User Guide")
     st.markdown("""
     ### About
     This tool analyzes Omaha hands using pre-calculated equity data.
-    
-    ### Filters (PLO)
-    * **Top Rank**: Filter by the highest card rank in hand.
-    * **Tags**: Use predefined tags like 'Double Suited' or 'Rundowns'.
-    
-    ### Charts
-    * **Win Distribution**: Shows how often you hit specific nut hands.
-    * **Equity Curve**: Shows where your hand stands among all possible hands.
-    * **Equity Scatter**: Visualizes the balance between Raw Equity and Nut Potential.
+    * **Highlight**: Use Groups 1-3 to color-code different hand types in the scatter plot.
     """)
