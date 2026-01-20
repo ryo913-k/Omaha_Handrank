@@ -103,73 +103,6 @@ def get_hand_tags(hand_str):
 def set_plo_input(hand_str):
     st.session_state.plo_input = hand_str
 
-# 【追加】カードピッカーのダイアログ関数
-@st.dialog("🃏 Card Picker")
-def open_card_picker_dialog():
-    st.caption("Select 4 cards.")
-    
-    # セッション内のピッカー用リストを初期化
-    if 'temp_picker_selection' not in st.session_state:
-        # 既存の入力があればそれを初期値にする試み
-        current_inp = normalize_input_text(st.session_state.get('plo_input', ''))
-        if len(current_inp) <= 4:
-            st.session_state.temp_picker_selection = current_inp
-        else:
-            st.session_state.temp_picker_selection = []
-
-    current = st.session_state.temp_picker_selection
-
-    # 1. 現在選択中のカードをビジュアル表示
-    st.markdown("##### Selected:")
-    if current:
-        st.markdown(render_hand_html(" ".join(current)), unsafe_allow_html=True)
-        if st.button("Clear", key="picker_clear"):
-            st.session_state.temp_picker_selection = []
-            st.rerun()
-    else:
-        st.markdown("<div style='height:60px; display:flex; align-items:center; color:#999;'>No cards selected</div>", unsafe_allow_html=True)
-
-    st.divider()
-
-    # 2. タブでスート切り替え (スマホの横幅対策)
-    tab_s, tab_h, tab_d, tab_c = st.tabs(["♠ Spades", "♥ Hearts", "♦ Diamonds", "♣ Clubs"])
-    
-    ranks = list("AKQJT98765432")
-    
-    def render_suit_grid(suit_code, suit_icon):
-        # 4列グリッドで表示 (スマホで見やすい)
-        cols = st.columns(4)
-        for i, rank in enumerate(ranks):
-            card_val = f"{rank}{suit_code}"
-            is_selected = card_val in current
-            
-            # 4枚選択済みなら、未選択ボタンは押せないようにする
-            disable_btn = is_selected or (len(current) >= 4)
-            
-            # ボタン表示
-            label = f"{rank}{suit_icon}"
-            if cols[i % 4].button(label, key=f"pbtn_{card_val}", disabled=disable_btn):
-                if len(current) < 4:
-                    current.append(card_val)
-                    st.session_state.temp_picker_selection = current
-                    st.rerun()
-
-    with tab_s: render_suit_grid('s', '♠')
-    with tab_h: render_suit_grid('h', '♥')
-    with tab_d: render_suit_grid('d', '♦')
-    with tab_c: render_suit_grid('c', '♣')
-    
-    st.divider()
-    
-    # 3. 決定ボタン
-    # 4枚選ばれている時だけ有効化、あるいはいつでも押せて、押すと反映
-    if st.button("Confirm Selection", type="primary", disabled=(len(current)!=4)):
-        final_hand = " ".join(current)
-        st.session_state.plo_input = final_hand
-        del st.session_state.temp_picker_selection
-        st.rerun()
-
-
 # ==========================================
 # データロード
 # ==========================================
@@ -304,13 +237,50 @@ with tab_plo:
         with c1:
             st.subheader("🔍 Hand Input")
             
-            # 【変更】ダイアログ起動ボタン
-            if st.button("🃏 Open Card Picker"):
-                open_card_picker_dialog()
-
-            inp_raw = st.text_input("Enter Hand (Text)", key='plo_input')
-            inp = normalize_input_text(inp_raw)
+            # --- カード選択 (Multiselect) ---
+            # 全カードの選択肢リストを作成
+            suits_disp = {'s': '♠', 'h': '♥', 'd': '♦', 'c': '♣'}
+            all_cards_options = []
+            for rank in "AKQJT98765432":
+                for suit_code in "shdc":
+                    # 表示ラベル: "A♠" / 値: "As"
+                    label = f"{rank}{suits_disp[suit_code]}"
+                    value = f"{rank}{suit_code}"
+                    all_cards_options.append((label, value))
             
+            # 選択肢ラベルのリスト
+            options_labels = [opt[0] for opt in all_cards_options]
+            
+            # マルチセレクト表示
+            selected_labels = st.multiselect(
+                "🃏 Select Cards (Searchable)",
+                options=options_labels,
+                max_selections=4,
+                placeholder="Choose 4 cards...",
+                help="Type to search (e.g. 'As', 'K'). Select exactly 4 cards."
+            )
+            
+            # 選択されたラベルを内部値(As, Kh...)に変換
+            if len(selected_labels) == 4:
+                selected_values = []
+                for label in selected_labels:
+                    # label ("A♠") から value ("As") を逆引き
+                    val = next(opt[1] for opt in all_cards_options if opt[0] == label)
+                    selected_values.append(val)
+                
+                # 自動的に入力欄を更新
+                # 注意: multiselectの結果を優先して表示するため、テキスト入力を上書きするロジック
+                current_visual_input = " ".join(selected_values)
+                # 入力欄のデフォルト値を更新するためにsession_state操作はしない(ループするため)
+                # 代わりに分析用の変数 `inp` をここで決定する
+                inp = selected_values
+                st.session_state.plo_input = current_visual_input # 同期
+            else:
+                # マルチセレクトが4枚未満なら、テキストボックスの入力を採用
+                inp_raw = st.text_input("Enter Hand (Text)", key='plo_input')
+                inp = normalize_input_text(inp_raw)
+
+            # 現在のハンドを表示
             if inp:
                 st.markdown(render_hand_html(" ".join(inp)), unsafe_allow_html=True)
             
@@ -331,6 +301,8 @@ with tab_plo:
                     st.write("🏷️ " + " ".join([f"`{t}`" for t in row['tags']]))
                     st.caption(f"Global Rank: {int(row['rank']):,} (Top {row['pct']:.1f}%)")
                 else: st.warning("Hand not found.")
+            elif len(selected_labels) > 0 and len(selected_labels) < 4:
+                st.info(f"Select {4 - len(selected_labels)} more cards.")
 
         with c2:
             if 'row' in locals():
