@@ -458,10 +458,91 @@ elif game_mode == "FLO8 (Hi/Lo)":
                 st.caption(f"Rank: #{rr['rank']} (Top {rr['pct_total']:.1f}%)")
             else: st.warning("Not found.")
 
+# ... (前略) ...
+
 elif game_mode == "Guide":
-    st.header("📖 User Guide")
+    st.header("📖 Omaha Ultimate Solver 取扱説明書")
+    
     st.markdown("""
-    ### About
-    This tool analyzes Omaha hands using pre-calculated equity data.
-    * **Highlight**: Use Groups 1-3 to color-code different hand types in the scatter plot.
+    このツールは、**Pot Limit Omaha (PLO)** および **Fixed Limit Omaha Hi/Lo (FLO8)** のハンド強度を、
+    数億回のシミュレーションデータと数学的モデルに基づいて精密に分析するアプリケーションです。
     """)
+
+    st.divider()
+
+    st.subheader("1. 画面の切り替え")
+    st.info("サイドバーの一番上にある **[Game Mode]** でモードを切り替えます。")
+    st.markdown("""
+    - **🔥 PLO (High Only)**: 通常のオマハ（ハイのみ）。詳細な勝率データとナッツポテンシャル分析が可能です。
+    - **⚖️ FLO8 (Hi/Lo)**: ハイロー（エイトオアベター）。Hutchinsonポイントとスクープ率を表示します。
+    """)
+
+    st.divider()
+
+    st.subheader("2. 🔥 PLO モードの機能")
+    
+    st.markdown("#### A. ハンド入力 (Hand Input)")
+    st.write("2通りの方法でハンドを入力できます。")
+    st.markdown("""
+    1. **🃏 Open Card Selector**: スートごとに分かれたパネルから、クリックで4枚を選択します（スマホ対応）。
+    2. **テキスト入力**: `As Ks Jd Th` のように直接入力します（大文字小文字区別なし）。
+    """)
+    
+    st.markdown("#### B. 分析指標 (Metrics)")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("""
+        - **Power Score**: 勝率に加え、「ナッツの作りやすさ」と「SPR（スタック比）」を考慮した総合スコアです。
+        - **Raw Equity**: 単純なオールイン勝率です。
+        - **Nut Equity**: ナッツ級の役（フラッシュ、フルハウス以上）で勝つ確率です。
+        """)
+    with col2:
+        st.markdown("""
+        - **Tags**: ハンドの特徴（`Double Suited`, `Rundown` など）を自動判定します。
+        - **Global Rank**: 全ハンド中の順位を表示します（例: Top 1.5%）。
+        """)
+
+    st.markdown("#### C. グラフ分析")
+    st.markdown("""
+    - **📊 Win Distribution (円グラフ)** 「どのような役で勝つか」の内訳です。ナッツ級（ストレート以上）が多いほど強いハンドと言えます。
+      
+    - **📈 Equity Curve (順位曲線)** あなたのハンドが全体の中でどの位置にいるかを可視化します。
+      > **💡 シークバー機能**: グラフ上のバーを動かすと、「上位10%の境界線にあるハンドは何か？」などを逆引きして分析できます。
+
+    - **🌌 Equity Scatter (散布図)** 「勝率(X軸)」と「ナッツ品質(Y軸)」のバランスを見ます。
+      - 右上にあるほど最強です。
+      - **Highlight機能**: サイドバーで設定した条件（赤・青・緑）のハンドがどこに分布しているかを確認できます。
+    """)
+
+    st.divider()
+
+    st.subheader("3. ⚖️ FLO8 モードの機能")
+    st.markdown("""
+    FLO8は「ハイ」と「ロー」の両方を狙うゲームです。
+    
+    - **Hutchinson Points**:  
+      FLO8の著名な評価システムです。一般的に **20ポイント以上** がプレイ可能なハンドとされています。
+      - 棒グラフで「High Pair」「Low Potential」などの内訳を表示します。
+      
+    - **Scoop / Equity**:  
+      - **Scoop %**: ハイとローの両方を取る（総取り）確率。最も重要な指標です。
+      - **High/Low Eq**: それぞれのポットを獲得する確率です。
+    """)
+
+    st.divider()
+
+    st.subheader("4. サイドバー機能 (便利ツール)")
+    st.markdown("""
+    - **🏷️ Filters (PLOのみ)** 「Aハイのみ」「ダブルスーテッドのみ」など、条件を絞ってランキングを表示します。
+      
+    - **🎨 Highlight Groups (PLOのみ)** 3つのグループ（🔴赤、🔵青、🟢緑）にそれぞれ違う条件を設定し、散布図上で色分け表示できます。
+      
+    - **🔍 Rank Search** 「1位のハンドは？」「1000位のハンドは？」など、順位からハンドを逆引きして分析ボタンでセットできます。
+      
+    - **⚙️ Scenario (SPR設定)** スタックの深さを設定します。
+      - **Deep**: ナッツを作る能力（Nut Equity）を重視します。
+      - **Short**: 単純な勝率（Raw Equity）を重視します。
+    """)
+    
+    st.success("Analysis powered by custom simulation engine.")
+
