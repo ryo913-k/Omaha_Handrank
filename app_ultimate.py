@@ -35,7 +35,7 @@ def render_hand_html(hand_str):
     suit_map = {'s': '♠', 'h': '♥', 'd': '♦', 'c': '♣'}
     color_map = {'s': 'black', 'h': '#d32f2f', 'd': '#1976d2', 'c': '#388e3c'}
     
-    html = "<div style='display:flex; gap:8px; margin-bottom:10px;'>"
+    html = "<div style='display:flex; gap:8px; margin-bottom:10px; flex-wrap: wrap;'>"
     for c in cards:
         if len(c) < 2: continue
         rank = c[:-1]
@@ -103,56 +103,72 @@ def get_hand_tags(hand_str):
 def set_plo_input(hand_str):
     st.session_state.plo_input = hand_str
 
-# 【追加】カードピッカーのレンダリング関数
-def draw_card_picker():
-    if 'picker_selection' not in st.session_state:
-        st.session_state.picker_selection = []
-
-    st.caption("👇 Select 4 cards to auto-fill input")
+# 【追加】カードピッカーのダイアログ関数
+@st.dialog("🃏 Card Picker")
+def open_card_picker_dialog():
+    st.caption("Select 4 cards.")
     
-    # 現在の選択状態を表示
-    current_sel = st.session_state.picker_selection
-    if current_sel:
-        st.markdown(render_hand_html(" ".join(current_sel)), unsafe_allow_html=True)
-        if st.button("Clear Selection"):
-            st.session_state.picker_selection = []
+    # セッション内のピッカー用リストを初期化
+    if 'temp_picker_selection' not in st.session_state:
+        # 既存の入力があればそれを初期値にする試み
+        current_inp = normalize_input_text(st.session_state.get('plo_input', ''))
+        if len(current_inp) <= 4:
+            st.session_state.temp_picker_selection = current_inp
+        else:
+            st.session_state.temp_picker_selection = []
+
+    current = st.session_state.temp_picker_selection
+
+    # 1. 現在選択中のカードをビジュアル表示
+    st.markdown("##### Selected:")
+    if current:
+        st.markdown(render_hand_html(" ".join(current)), unsafe_allow_html=True)
+        if st.button("Clear", key="picker_clear"):
+            st.session_state.temp_picker_selection = []
             st.rerun()
     else:
-        st.write("(No cards selected)")
+        st.markdown("<div style='height:60px; display:flex; align-items:center; color:#999;'>No cards selected</div>", unsafe_allow_html=True)
 
-    # グリッド表示 (Suits x Ranks)
-    suits_data = [('s', '♠'), ('h', '♥'), ('d', '♦'), ('c', '♣')]
-    ranks_data = list("AKQJT98765432")
+    st.divider()
+
+    # 2. タブでスート切り替え (スマホの横幅対策)
+    tab_s, tab_h, tab_d, tab_c = st.tabs(["♠ Spades", "♥ Hearts", "♦ Diamonds", "♣ Clubs"])
     
-    for suit_code, suit_icon in suits_data:
-        cols = st.columns(13)
-        for i, rank in enumerate(ranks_data):
+    ranks = list("AKQJT98765432")
+    
+    def render_suit_grid(suit_code, suit_icon):
+        # 4列グリッドで表示 (スマホで見やすい)
+        cols = st.columns(4)
+        for i, rank in enumerate(ranks):
             card_val = f"{rank}{suit_code}"
+            is_selected = card_val in current
             
-            # 既に選択済みのカードは無効化(または視覚的に区別)したいが
-            # Streamlitのボタンはdisabledにすると押せないので、
-            # 選択済みかどうかのチェックをロジックで行う
-            is_selected = card_val in current_sel
+            # 4枚選択済みなら、未選択ボタンは押せないようにする
+            disable_btn = is_selected or (len(current) >= 4)
             
-            # ボタンのラベル
-            label = f"{rank}"
-            
-            # ボタン押下処理
-            if cols[i].button(label, key=f"btn_{card_val}", disabled=is_selected):
-                if len(current_sel) < 4:
-                    current_sel.append(card_val)
-                    st.session_state.picker_selection = current_sel
-                    
-                    # 4枚揃ったらメイン入力に反映してリロード
-                    if len(current_sel) == 4:
-                        final_hand = " ".join(current_sel)
-                        st.session_state.plo_input = final_hand
-                        st.session_state.picker_selection = [] # リセット
-                        st.rerun()
-                    else:
-                        st.rerun()
-        # 行の間に少し隙間
-        # st.write("") 
+            # ボタン表示
+            label = f"{rank}{suit_icon}"
+            if cols[i % 4].button(label, key=f"pbtn_{card_val}", disabled=disable_btn):
+                if len(current) < 4:
+                    current.append(card_val)
+                    st.session_state.temp_picker_selection = current
+                    st.rerun()
+
+    with tab_s: render_suit_grid('s', '♠')
+    with tab_h: render_suit_grid('h', '♥')
+    with tab_d: render_suit_grid('d', '♦')
+    with tab_c: render_suit_grid('c', '♣')
+    
+    st.divider()
+    
+    # 3. 決定ボタン
+    # 4枚選ばれている時だけ有効化、あるいはいつでも押せて、押すと反映
+    if st.button("Confirm Selection", type="primary", disabled=(len(current)!=4)):
+        final_hand = " ".join(current)
+        st.session_state.plo_input = final_hand
+        del st.session_state.temp_picker_selection
+        st.rerun()
+
 
 # ==========================================
 # データロード
@@ -288,9 +304,9 @@ with tab_plo:
         with c1:
             st.subheader("🔍 Hand Input")
             
-            # 【追加】カードピッカー (Expander)
-            with st.expander("🃏 Open Card Picker (Visual Input)"):
-                draw_card_picker()
+            # 【変更】ダイアログ起動ボタン
+            if st.button("🃏 Open Card Picker"):
+                open_card_picker_dialog()
 
             inp_raw = st.text_input("Enter Hand (Text)", key='plo_input')
             inp = normalize_input_text(inp_raw)
