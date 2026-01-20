@@ -29,15 +29,15 @@ def normalize_input_text(text):
         if len(p) >= 2: cleaned.append(p[:-1].upper() + p[-1].lower())
     return cleaned
 
-# 【追加】カードを色付きHTMLで表示する関数
+# 【修正】カード表示関数 (インデントによるコードブロック化を防止)
 def render_hand_html(hand_str):
     if not hand_str: return ""
     cards = hand_str.split()
     
-    # 指定カラー: スペード黒、ハート赤、ダイヤ青、クラブ緑
     suit_map = {'s': '♠', 'h': '♥', 'd': '♦', 'c': '♣'}
-    color_map = {'s': 'black', 'h': '#d32f2f', 'd': '#1976d2', 'c': '#388e3c'} # 視認性のため少し調整したRGB
+    color_map = {'s': 'black', 'h': '#d32f2f', 'd': '#1976d2', 'c': '#388e3c'}
     
+    # 改行なしで記述してMarkdownの誤認識を防ぐ
     html = "<div style='display:flex; gap:8px; margin-bottom:10px;'>"
     for c in cards:
         if len(c) < 2: continue
@@ -47,25 +47,17 @@ def render_hand_html(hand_str):
         symbol = suit_map.get(suit, suit)
         color = color_map.get(suit, 'black')
         
-        card_html = f"""
-        <div style='
-            width: 45px;
-            height: 60px;
-            background-color: white;
-            border: 1px solid #bbb;
-            border-radius: 6px;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            font-size: 20px;
-            font-weight: bold;
-            color: {color};
-            box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
-        '>
-            {rank}{symbol}
-        </div>
-        """
-        html += card_html
+        # style属性を1行にまとめる
+        style = (
+            f"width:45px; height:60px; background-color:white; "
+            f"border:1px solid #bbb; border-radius:6px; "
+            f"display:flex; justify-content:center; align-items:center; "
+            f"font-size:20px; font-weight:bold; color:{color}; "
+            f"box-shadow:2px 2px 5px rgba(0,0,0,0.1);"
+        )
+        
+        html += f"<div style='{style}'>{rank}{symbol}</div>"
+        
     html += "</div>"
     return html
 
@@ -261,7 +253,7 @@ with tab_plo:
             inp_raw = st.text_input("Enter Hand", key='plo_input')
             inp = normalize_input_text(inp_raw)
             
-            # 【追加】入力されたハンドを色付きカードで表示
+            # カード表示
             if inp:
                 st.markdown(render_hand_html(" ".join(inp)), unsafe_allow_html=True)
             
@@ -316,15 +308,12 @@ with tab_plo:
             with cc1:
                 st.subheader("📈 Equity Curve")
                 
-                # シークバー
                 seek_pct = st.slider("🔍 Seek Hand Strength (Top X%)", 0.0, 100.0, 10.0, 0.1)
                 
-                # 該当ハンド特定
                 s_idx = int(len(df_plo) * (seek_pct / 100))
                 if s_idx >= len(df_plo): s_idx = len(df_plo) - 1
                 s_row = df_plo.iloc[s_idx]
                 
-                # チャート
                 scurve = df_plo.iloc[::200, :]
                 fig3, ax3 = plt.subplots(figsize=(5, 4))
                 ax3.plot(scurve["pct"], scurve["equity"], c="#cccccc", label="All")
@@ -334,7 +323,6 @@ with tab_plo:
                 
                 ax3.set_xlabel("Top X% of Hands"); ax3.set_ylabel("Equity")
                 
-                # ズーム
                 zoom_chk = st.checkbox("Zoom around Seek", False)
                 if zoom_chk: ax3.set_xlim(max(0, seek_pct-10), min(100, seek_pct+10))
                 else: ax3.set_xlim(0, 100)
@@ -343,11 +331,9 @@ with tab_plo:
                 ax3.grid(True, ls='--', alpha=0.3)
                 st.pyplot(fig3)
                 
-                # シーク詳細
                 st.info(f"**Top {seek_pct:.1f}% Boundary**")
                 sk1, sk2 = st.columns([3, 1])
                 with sk1:
-                    # 【追加】シークされたハンドを色付きカードで表示
                     st.markdown(render_hand_html(s_row['hand']), unsafe_allow_html=True)
                     st.caption(f"Eq: {s_row['equity']*100:.1f}% | {' '.join(s_row['tags'])}")
                 with sk2:
@@ -377,7 +363,6 @@ with tab_plo:
                 xmin, xmax, ymin, ymax = mx, mx, my, my
                 focused = False
 
-                # Filtered (Sample)
                 if filtered_df is not None and not filtered_df.empty:
                     fdf = filtered_df.sample(2000, random_state=42) if len(filtered_df)>2000 else filtered_df
                     fx, fy = gxy(fdf, cmode)
@@ -386,7 +371,6 @@ with tab_plo:
                     ymin, ymax = min(ymin, fy.min()), max(ymax, fy.max())
                     focused = True
                 
-                # Highlight (Global Search & Sample)
                 if high_tags:
                     ht = set(high_tags)
                     src = filtered_df if filtered_df is not None else df_plo
