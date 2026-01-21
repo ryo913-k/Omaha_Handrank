@@ -15,15 +15,11 @@ st.set_page_config(page_title="Omaha Hand Analyzer", layout="wide")
 
 st.markdown("""
 <style>
-    /* マルチセレクトのドロップダウン調整 */
     ul[data-testid="stSelectboxVirtualDropdown"] { z-index: 99999 !important; }
-    /* サイドバーの余白調整 */
     section[data-testid="stSidebar"] .block-container { padding-top: 2rem; }
-    /* スマホUI調整 */
     .stButton button { width: 100%; border-radius: 8px; font-weight: bold; }
     .stMetric { background-color: #f0f2f6; padding: 10px; border-radius: 5px; }
-    
-    /* Draw Pattern Box (Board Analyzer用) */
+    /* Draw Pattern Box */
     .draw-box {
         border: 1px solid #ddd; border-left: 5px solid #ccc;
         background-color: #fff; padding: 8px 12px; margin-bottom: 6px; border-radius: 4px;
@@ -65,22 +61,14 @@ def render_hand_html(hand_str, size=45):
     cards = hand_str.split()
     suit_map = {'s': '♠', 'h': '♥', 'd': '♦', 'c': '♣'}
     color_map = {'s': 'black', 'h': '#d32f2f', 'd': '#1976d2', 'c': '#388e3c'}
-    
     html = "<div style='display:flex; gap:6px; margin-bottom:10px; flex-wrap: wrap;'>"
     for c in cards:
         if len(c) < 2: continue
-        rank = c[:-1]
-        suit = c[-1].lower()
-        symbol = suit_map.get(suit, suit)
-        color = color_map.get(suit, 'black')
-        
-        style = (
-            f"width:{size}px; height:{size*1.35}px; background-color:white; "
-            f"border:1px solid #bbb; border-radius:5px; "
-            f"display:flex; justify-content:center; align-items:center; "
-            f"font-size:{size*0.45}px; font-weight:bold; color:{color}; "
-            f"box-shadow:2px 2px 4px rgba(0,0,0,0.1);"
-        )
+        rank = c[:-1]; suit = c[-1].lower()
+        symbol = suit_map.get(suit, suit); color = color_map.get(suit, 'black')
+        style = (f"width:{size}px; height:{size*1.35}px; background-color:white; border:1px solid #bbb; "
+                 f"border-radius:4px; display:flex; justify-content:center; align-items:center; "
+                 f"font-size:{size*0.45}px; font-weight:bold; color:{color}; box-shadow:2px 2px 4px rgba(0,0,0,0.1);")
         html += f"<div style='{style}'>{rank}{symbol}</div>"
     html += "</div>"
     return html
@@ -91,7 +79,6 @@ def get_hand_tags(hand_str):
     tags = []
     ranks = sorted([c.rank for c in cards], reverse=True)
     suits = [c.suit for c in cards]
-    
     rc = {r: ranks.count(r) for r in ranks}
     pairs = [r for r, c in rc.items() if c == 2]
     if 12 in pairs: tags.append("AA")
@@ -100,18 +87,15 @@ def get_hand_tags(hand_str):
     if len(pairs)==2: tags.append("Double Pair")
     elif len(pairs)==1: tags.append("Single Pair")
     elif len(set(ranks))==4: tags.append("No Pair")
-
     sc = {s: suits.count(s) for s in suits}
     s_dist = sorted(sc.values(), reverse=True) + [0]*(4-len(sc))
     is_ds = (s_dist[0]==2 and s_dist[1]==2)
     is_mono = (s_dist[0]==4)
     is_ss = (s_dist[0]>=2 and not is_ds and not is_mono)
-    
     if is_ds: tags.append("Double Suited")
     if s_dist[0]==1: tags.append("Rainbow")
     if is_mono: tags.append("Monotone")
     if is_ss: tags.append("Single Suited")
-    
     if len(set(ranks))==4:
         ur = sorted(list(set(ranks)), reverse=True)
         gaps = [ur[i]-ur[i+1] for i in range(3)]
@@ -123,11 +107,6 @@ def get_hand_tags(hand_str):
 def set_input_callback(target_key, value):
     st.session_state[target_key] = value
     st.session_state[f"{target_key}_text"] = value
-    # リセット処理
-    for s in ['s','h','d','c']:
-        ms_key = f"ms_{s}_{target_key}"
-        if ms_key in st.session_state:
-            st.session_state[ms_key] = []
 
 # ==========================================
 # 3. Postflop Logic (Board Analyzer)
@@ -141,9 +120,7 @@ def eval_5card_score(cards):
     if len(uniq) == 5:
         if uniq[4]-uniq[0] == 4: is_str = True; str_high = uniq[4]
         elif uniq == [0,1,2,3,12]: is_str = True; str_high = 3
-    
     rc = Counter(ranks); counts = sorted(rc.values(), reverse=True)
-    
     if is_str and is_flush: return 900 + str_high
     if counts[0] == 4: return 800 + ranks[0]
     if counts[0] == 3 and counts[1] == 2: return 700 + [k for k,v in rc.items() if v==3][0]
@@ -180,7 +157,6 @@ def precompute_nut_scores(board_cards):
 
 def evaluate_hand_and_draws(hand_cards, board_cards, nut_scores_map):
     best_score = get_best_score_strict(hand_cards, board_cards)
-    
     cat_map = {9:"StrFlush",8:"Quads",7:"FullHouse",6:"Flush",5:"Straight",4:"Set/Trips",3:"TwoPair",2:"Pair",1:"HighCard"}
     made_cat_val = best_score // 100
     made_label = cat_map.get(made_cat_val, "HighCard")
@@ -191,7 +167,6 @@ def evaluate_hand_and_draws(hand_cards, board_cards, nut_scores_map):
     suits = ['s','h','d','c']
     deck_ranks = range(13)
     used = set((c.rank, c.suit) for c in hand_cards + board_cards)
-    
     outs = {'Str':{'tot':0,'nut':0}, 'Fls':{'tot':0,'nut':0}}
     
     # Flush Outs
@@ -219,12 +194,10 @@ def evaluate_hand_and_draws(hand_cards, board_cards, nut_scores_map):
     # Straight Outs
     curr_str_score = 0
     if made_cat_val == 5: curr_str_score = best_score
-    
     for r in deck_ranks:
         if all((r, s) in used for s in suits): continue
         test_board = board_cards + [SimpleCard(f"{'23456789TJQKA'[r]}s")]
         sim_score = get_best_score_strict(hand_cards, test_board)
-        
         if 500 <= sim_score < 600:
             if sim_score > curr_str_score:
                 av_suits = sum(1 for s in suits if (r,s) not in used)
@@ -237,12 +210,10 @@ def evaluate_hand_and_draws(hand_cards, board_cards, nut_scores_map):
     if flush_draw_type: draw_list.append(flush_draw_type)
     str_tot = outs['Str']['tot']
     str_nut = outs['Str']['nut']
-    
     if str_tot > 0:
         label = f"Wrap({str_tot})" if str_tot >= 9 else f"Str({str_tot})"
         if str_nut > 0: label += f" [{str_nut}N]"
         draw_list.append(label)
-        
     draw_str = " + ".join(draw_list) if draw_list else "No Draw"
     total_outs_val = outs['Str']['tot'] + outs['Fls']['tot']
     
@@ -279,9 +250,10 @@ def load_flo8_data(csv_path="flo8_ranking.csv"):
     except: return None
 
 # ==========================================
-# 5. UI Components
+# 5. UI Components (Safe Selector)
 # ==========================================
 def render_card_selector(session_key):
+    # エラー回避のため、Multiselectのクリアは「確定ボタンが押された時」にRerunをかけて行う
     with st.expander("🃏 Open Card Selector (by Suit)", expanded=False):
         ranks_list = list("AKQJT98765432")
         c_s, c_h, c_d, c_c = st.columns(4)
@@ -301,15 +273,27 @@ def render_card_selector(session_key):
 
         collected = [f"{r}s" for r in sel_s] + [f"{r}h" for r in sel_h] + [f"{r}d" for r in sel_d] + [f"{r}c" for r in sel_c]
 
+        # 4枚揃った瞬間に処理
         if len(collected) == 4:
+            # 入力値を確定
             final_hand = " ".join(collected)
-            if st.session_state.get(session_key) != final_hand:
-                set_input_callback(session_key, final_hand)
-                st.rerun()
-            return collected
+            
+            # メインの入力欄を更新
+            st.session_state[session_key] = final_hand
+            st.session_state[f"{session_key}_text"] = final_hand
+            
+            # 【重要】Multiselectのキーを安全にリセット
+            # Streamlitのレンダリングループ内で直接delやsetを行うとエラーになる場合があるため、
+            # 描画が終わった後にリセットされるよう、キーを削除してrerunする
+            for s in ['s','h','d','c']:
+                ms_key = f"ms_{s}_{session_key}"
+                if ms_key in st.session_state:
+                    del st.session_state[ms_key]
+            
+            st.rerun()
+            
         elif len(collected) > 0:
             st.caption(f"Selected: {len(collected)}/4 cards.")
-    return []
 
 # ==========================================
 # 6. Main Application Logic
@@ -334,13 +318,12 @@ with st.sidebar:
     st.divider()
 
 # ==========================================
-# MODE: PLO (Rich Features Restored)
+# MODE: PLO (Full Features)
 # ==========================================
 if game_mode == "PLO (High Only)":
     if df_plo is None:
         st.warning("Data loading failed.")
     else:
-        # Variables
         ranks_opt = list("AKQJT98765432")
         avail_tags = ["AA","KK","QQ","Double Pair","Double Suited","Single Suited","A-High Suit","Rainbow","Monotone","Broadway","Perfect Rundown","Double Gap Rundown"]
         
@@ -654,7 +637,7 @@ elif game_mode == "PLO Board Analyzer":
                         with c_p2: show_patterns(p2_pat, len(p2h), "Player 2 Draws", "#999")
 
 # ==========================================
-# MODE: FLO8 (Rich Features Restored)
+# MODE: FLO8 (Full Features)
 # ==========================================
 elif game_mode == "FLO8 (Hi/Lo)":
     with st.sidebar:
@@ -668,8 +651,7 @@ elif game_mode == "FLO8 (Hi/Lo)":
                     if not fr8.empty:
                         r8_found = fr8.iloc[0]
                         if st.button("Analyze", key="bcp_flo8"):
-                             set_input_callback('flo8_input', r8_found['hand'])
-                             st.rerun()
+                             set_input_callback('flo8_input', r8_found['hand']); st.rerun()
                     else: st.write("-")
                 if not fr8.empty:
                     st.caption(f"**{r8_found['hand']}** (Top {r8_found['pct_total']:.2f}%)")
@@ -706,7 +688,7 @@ elif game_mode == "FLO8 (Hi/Lo)":
 
 elif game_mode == "Guide":
     st.header("📖 Guide")
-    st.markdown("All features (PLO Rich, PLO Board Analyzer, FLO8 Rich) active.")
+    st.markdown("All features active. Errors fixed.")
 
 with st.sidebar:
     st.markdown("---")
