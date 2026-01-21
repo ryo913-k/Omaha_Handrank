@@ -107,11 +107,10 @@ def get_hand_tags(hand_str):
 def set_input_callback(target_key, value):
     st.session_state[target_key] = value
     widget_key = f"{target_key}_text"
-    if widget_key in st.session_state:
-        st.session_state[widget_key] = value
+    st.session_state[widget_key] = value
 
 # ==========================================
-# 3. Postflop Logic (Fixed Error Here)
+# 3. Postflop Logic
 # ==========================================
 def get_best_straight_rank(ranks):
     uniq = sorted(list(set(ranks)))
@@ -128,7 +127,6 @@ def calculate_detailed_outs(hand_cards, board_cards):
     suits = ['s','h','d','c']
     used_cards = set((c.rank, c.suit) for c in hand_cards + board_cards)
     
-    # 修正: キーを統一
     outs = {
         'Straight': {'total': 0, 'nut': 0},
         'Flush': {'total': 0, 'nut': 0},
@@ -188,8 +186,39 @@ def calculate_detailed_outs(hand_cards, board_cards):
                     
                     if my_str >= possible_max:
                         outs['Straight']['nut'] += 1
-
     return outs
+
+def evaluate_made_hand(hand_cards, board_cards):
+    # 簡易役判定（グラフ用）
+    all_cards = hand_cards + board_cards
+    ranks = [c.rank for c in all_cards]
+    
+    # Check
+    is_flush = False
+    for s in ['s','h','d','c']:
+        if sum(1 for c in hand_cards if c.suit==s)>=2 and sum(1 for c in board_cards if c.suit==s)>=3: is_flush = True
+    
+    is_straight = (get_best_straight_rank(ranks) != -1)
+    
+    rc = Counter(ranks)
+    is_quads = any(v==4 for v in rc.values())
+    is_fh = (any(v==3 for v in rc.values()) and len(set(ranks)) < len(ranks))
+    
+    h_rc = Counter([c.rank for c in hand_cards])
+    b_rc = Counter([c.rank for c in board_cards])
+    has_set = any(h_rc[r]==2 and b_rc[r]==1 for r in h_rc)
+    has_trips = any(h_rc[r]==1 and b_rc[r]==2 for r in h_rc)
+    pairs = sum(1 for v in rc.values() if v>=2)
+    
+    if is_quads: return "Quads"
+    if is_fh: return "Full House"
+    if is_flush: return "Flush"
+    if is_straight: return "Straight"
+    if has_set: return "Set"
+    if has_trips: return "Trips"
+    if pairs >= 2: return "Two Pair"
+    if pairs == 1: return "One Pair"
+    return "High Card"
 
 # ==========================================
 # 4. Data Loading
@@ -269,7 +298,6 @@ if game_mode == "PLO (High Only)":
                 inc_tags = st.multiselect("Include", ["AA","KK","Double Suited","Rundown"])
                 
             d_limit = st.slider("List Limit", 5, 50, 10)
-            
             filtered_df = df_plo
             if sel_top: filtered_df = filtered_df[filtered_df["top_rank"].isin(sel_top)]
             if inc_tags: 
@@ -286,7 +314,6 @@ if game_mode == "PLO (High Only)":
         with c1:
             st.subheader("🔍 Hand Input")
             
-            # ランダムボタン (メイン画面配置)
             if st.button("🎲 Random Hand", key="rnd_plo"):
                 deck = []
                 for r in "AKQJT98765432":
@@ -354,13 +381,14 @@ elif game_mode == "Postflop Range":
 
         st.subheader("1. Board Input")
         
-        # ランダムボタン (メイン画面配置)
+        # ランダムボタン: 入力欄のキーも強制更新
         if st.button("🎲 Random Flop"):
             deck = []
             for r in "AKQJT98765432":
                 for s in "shdc": deck.append(f"{r}{s}")
-            rb = random.sample(deck, 3)
-            st.session_state.pf_board = " ".join(rb)
+            rb = " ".join(random.sample(deck, 3))
+            st.session_state.pf_board = rb
+            st.session_state.pf_board_text = rb
             st.rerun()
 
         inp_board = st.text_input("Board Cards (3-5)", key='pf_board_text')
@@ -373,7 +401,6 @@ elif game_mode == "Postflop Range":
             if len(b_cards)<3: st.error("Need 3+ cards")
             else:
                 with st.spinner("Simulating 5,000 hands..."):
-                    # Get Hands
                     def get_range(mode, val, fix, df):
                         if "Fixed" in mode:
                             h = normalize_input_text(fix)
@@ -387,64 +414,83 @@ elif game_mode == "Postflop Range":
                     p2h = get_range(p2_mode, p2_val if "Top" in p2_mode else 0, st.session_state.get('p2f',""), df_plo)
 
                     if p1h and p2h:
-                        # Analysis Logic
                         b_objs = [SimpleCard(c) for c in b_cards]
                         
                         def analyze(h_list):
                             total = len(h_list)
-                            # エラー修正: キーを統一
                             cats_agg = {'Straight':0, 'Flush':0, 'FullHouse':0}
                             nut_agg = {'Straight':0, 'Flush':0, 'FullHouse':0}
+                            made_stats = defaultdict(int)
                             
                             for h_str in h_list:
                                 h_objs = [SimpleCard(c) for c in h_str.split()]
-                                outs = calculate_detailed_outs(h_objs, b_objs)
+                                # Made Hands
+                                made = evaluate_made_hand(h_objs, b_objs)
+                                made_stats[made] += 1
                                 
+                                # Draws
+                                outs = calculate_detailed_outs(h_objs, b_objs)
                                 for k in ['Straight','Flush','FullHouse']:
                                     cats_agg[k] += outs[k]['total']
                                     nut_agg[k] += outs[k]['nut']
                             
-                            return {k: v/total for k,v in cats_agg.items()}, {k: v/total for k,v in nut_agg.items()}
+                            # Avg outs
+                            return (
+                                {k: v/total for k,v in cats_agg.items()}, 
+                                {k: v/total for k,v in nut_agg.items()},
+                                {k: v/total*100 for k,v in made_stats.items()}
+                            )
 
-                        p1_avg, p1_nut = analyze(p1h)
-                        p2_avg, p2_nut = analyze(p2h)
+                        p1_avg, p1_nut, p1_made = analyze(p1h)
+                        p2_avg, p2_nut, p2_made = analyze(p2h)
 
                         st.divider()
-                        st.subheader("🎯 Average Outs Analysis")
                         
-                        # Graph
-                        labels = ["Straight", "Flush", "FullHouse"]
-                        keys = ['Straight', 'Flush', 'FullHouse']
+                        # --- Made Hand Graph ---
+                        st.subheader("1. Made Hand Distribution")
+                        made_cats = ["Quads", "Full House", "Flush", "Straight", "Set", "Trips", "Two Pair", "One Pair"]
+                        fig1, ax1 = plt.subplots(figsize=(8, 4))
+                        y = np.arange(len(made_cats))
+                        h = 0.35
+                        p1_m_vals = [p1_made.get(c,0) for c in made_cats]
+                        p2_m_vals = [p2_made.get(c,0) for c in made_cats]
                         
-                        fig, ax = plt.subplots(figsize=(8, 4))
-                        x = np.arange(len(labels))
+                        ax1.barh(y + h/2, p1_m_vals, h, label='P1 (Blue)', color='dodgerblue')
+                        ax1.barh(y - h/2, p2_m_vals, h, label='P2 (Red)', color='crimson')
+                        ax1.set_yticks(y); ax1.set_yticklabels(made_cats)
+                        ax1.set_xlabel("Frequency (%)")
+                        ax1.legend()
+                        ax1.grid(axis='x', ls='--', alpha=0.3)
+                        st.pyplot(fig1)
+
+                        # --- Outs Graph ---
+                        st.divider()
+                        st.subheader("2. Average Outs (Nut vs Non-Nut)")
+                        
+                        out_cats = ["Straight", "Flush", "FullHouse"]
+                        fig2, ax2 = plt.subplots(figsize=(8, 4))
+                        x = np.arange(len(out_cats))
                         w = 0.35
                         
-                        # P1 Bars
-                        p1_tot = [p1_avg[k] for k in keys]
-                        p1_n = [p1_nut[k] for k in keys]
+                        # P1
+                        p1_tot = [p1_avg[k] for k in out_cats]
+                        p1_n = [p1_nut[k] for k in out_cats]
                         p1_weak = [t-n for t,n in zip(p1_tot, p1_n)]
+                        ax2.bar(x - w/2, p1_n, w, label='P1 Nut Outs', color='#1976D2')
+                        ax2.bar(x - w/2, p1_weak, w, bottom=p1_n, label='P1 Non-Nut', color='#90CAF9')
                         
-                        ax.bar(x - w/2, p1_n, w, label='P1 Nut Outs', color='#1976D2')
-                        ax.bar(x - w/2, p1_weak, w, bottom=p1_n, label='P1 Non-Nut', color='#90CAF9')
-                        
-                        # P2 Bars
-                        p2_tot = [p2_avg[k] for k in keys]
-                        p2_n = [p2_nut[k] for k in keys]
+                        # P2
+                        p2_tot = [p2_avg[k] for k in out_cats]
+                        p2_n = [p2_nut[k] for k in out_cats]
                         p2_weak = [t-n for t,n in zip(p2_tot, p2_n)]
+                        ax2.bar(x + w/2, p2_n, w, label='P2 Nut Outs', color='#D32F2F')
+                        ax2.bar(x + w/2, p2_weak, w, bottom=p2_n, label='P2 Non-Nut', color='#EF9A9A')
                         
-                        ax.bar(x + w/2, p2_n, w, label='P2 Nut Outs', color='#D32F2F')
-                        ax.bar(x + w/2, p2_weak, w, bottom=p2_n, label='P2 Non-Nut', color='#EF9A9A')
-                        
-                        ax.set_xticks(x)
-                        ax.set_xticklabels(labels)
-                        ax.set_ylabel("Avg Outs Count")
-                        ax.set_title("Range vs Range: Outs Comparison")
-                        ax.legend()
-                        ax.grid(axis='y', ls='--', alpha=0.3)
-                        
-                        st.pyplot(fig)
-                        st.caption("※棒グラフ: 濃い色=ナッツアウツ平均, 薄い色=非ナッツアウツ平均")
+                        ax2.set_xticks(x); ax2.set_xticklabels(out_cats)
+                        ax2.set_ylabel("Avg Outs Count")
+                        ax2.legend()
+                        ax2.grid(axis='y', ls='--', alpha=0.3)
+                        st.pyplot(fig2)
 
 # -----------------
 # FLO8 & Guide
