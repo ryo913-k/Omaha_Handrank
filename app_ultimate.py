@@ -23,7 +23,7 @@ st.markdown("""
     .stButton button { width: 100%; border-radius: 8px; font-weight: bold; }
     .stMetric { background-color: #f0f2f6; padding: 10px; border-radius: 5px; }
     
-    /* Draw Pattern Box */
+    /* Draw Pattern Box (Board Analyzer用) */
     .draw-box {
         border: 1px solid #ddd; border-left: 5px solid #ccc;
         background-color: #fff; padding: 8px 12px; margin-bottom: 6px; border-radius: 4px;
@@ -123,13 +123,14 @@ def get_hand_tags(hand_str):
 def set_input_callback(target_key, value):
     st.session_state[target_key] = value
     st.session_state[f"{target_key}_text"] = value
+    # リセット処理
     for s in ['s','h','d','c']:
         ms_key = f"ms_{s}_{target_key}"
         if ms_key in st.session_state:
             st.session_state[ms_key] = []
 
 # ==========================================
-# 3. Postflop Logic (Strict PLO)
+# 3. Postflop Logic (Board Analyzer)
 # ==========================================
 def eval_5card_score(cards):
     ranks = sorted([c.rank for c in cards], reverse=True)
@@ -284,6 +285,7 @@ def render_card_selector(session_key):
     with st.expander("🃏 Open Card Selector (by Suit)", expanded=False):
         ranks_list = list("AKQJT98765432")
         c_s, c_h, c_d, c_c = st.columns(4)
+        
         with c_s:
             st.markdown("**♠ Spades**")
             sel_s = st.multiselect("Spades", ranks_list, key=f"ms_s_{session_key}", label_visibility="collapsed")
@@ -314,6 +316,7 @@ def render_card_selector(session_key):
 # ==========================================
 st.title("🃏 Omaha Hand Analyzer")
 
+# Init Session
 for k in ['plo_input', 'flo8_input', 'p1_fixed', 'p2_fixed', 'pf_board']:
     if k not in st.session_state: st.session_state[k] = ""
     tk = f"{k}_text"
@@ -331,7 +334,7 @@ with st.sidebar:
     st.divider()
 
 # ==========================================
-# MODE: PLO (Rich Features)
+# MODE: PLO (Rich Features Restored)
 # ==========================================
 if game_mode == "PLO (High Only)":
     if df_plo is None:
@@ -527,7 +530,7 @@ if game_mode == "PLO (High Only)":
                 st.pyplot(fig2)
 
 # ==========================
-# POSTFLOP RANGE (BOARD ANALYZER)
+# PLO BOARD ANALYZER
 # ==========================
 elif game_mode == "PLO Board Analyzer":
     st.header("📊 PLO Board Analyzer")
@@ -651,11 +654,11 @@ elif game_mode == "PLO Board Analyzer":
                         with c_p2: show_patterns(p2_pat, len(p2h), "Player 2 Draws", "#999")
 
 # ==========================================
-# MODE: FLO8 (Rich Features)
+# MODE: FLO8 (Rich Features Restored)
 # ==========================================
 elif game_mode == "FLO8 (Hi/Lo)":
     with st.sidebar:
-        with st.expander("1. 🔍 Rank Search", expanded=True):
+        with st.expander("1. 🔍 Hand Rank", expanded=True):
             if df_flo8 is not None:
                 c_rk8_1, c_rk8_2 = st.columns([1,2])
                 with c_rk8_1:
@@ -665,7 +668,8 @@ elif game_mode == "FLO8 (Hi/Lo)":
                     if not fr8.empty:
                         r8_found = fr8.iloc[0]
                         if st.button("Analyze", key="bcp_flo8"):
-                             set_input_callback('flo8_input', r8_found['hand']); st.rerun()
+                             set_input_callback('flo8_input', r8_found['hand'])
+                             st.rerun()
                     else: st.write("-")
                 if not fr8.empty:
                     st.caption(f"**{r8_found['hand']}** (Top {r8_found['pct_total']:.2f}%)")
@@ -702,7 +706,7 @@ elif game_mode == "FLO8 (Hi/Lo)":
 
 elif game_mode == "Guide":
     st.header("📖 Guide")
-    st.markdown("All features (PLO Preflop, Board Analyzer, FLO8) are active.")
+    st.markdown("All features (PLO Rich, PLO Board Analyzer, FLO8 Rich) active.")
 
 with st.sidebar:
     st.markdown("---")
