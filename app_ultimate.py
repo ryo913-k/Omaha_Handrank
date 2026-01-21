@@ -14,21 +14,10 @@ st.set_page_config(page_title="Omaha Hand Analyzer", layout="wide")
 
 st.markdown("""
 <style>
-    /* スマホUI調整 */
-    .stButton button {
-        width: 100%;
-        border-radius: 8px;
-        font-weight: bold;
-    }
-    /* カード表示用 */
-    .card-display {
-        display: flex; gap: 5px; justify-content: center; margin-bottom: 10px;
-    }
-    .card-box {
-        width: 45px; height: 60px; background: white; border: 1px solid #ccc;
-        border-radius: 5px; display: flex; align-items: center; justify-content: center;
-        font-weight: bold; font-size: 18px; box-shadow: 1px 1px 3px rgba(0,0,0,0.1);
-    }
+    /* UI調整 */
+    .stButton button { width: 100%; border-radius: 8px; font-weight: bold; }
+    section[data-testid="stSidebar"] .block-container { padding-top: 2rem; }
+    .stMetric { background-color: #f0f2f6; padding: 10px; border-radius: 5px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -56,7 +45,7 @@ def normalize_input_text(text):
     return cleaned
 
 def render_hand_html(hand_str, size=45):
-    if not hand_str: return "<div style='height:60px; color:#aaa; display:flex; align-items:center;'>No cards selected</div>"
+    if not hand_str: return ""
     cards = hand_str.split()
     suit_map = {'s': '♠', 'h': '♥', 'd': '♦', 'c': '♣'}
     color_map = {'s': 'black', 'h': '#d32f2f', 'd': '#1976d2', 'c': '#388e3c'}
@@ -120,13 +109,9 @@ def set_input_callback(target_key, value):
     widget_key = f"{target_key}_text"
     if widget_key in st.session_state:
         st.session_state[widget_key] = value
-    # セレクター一時状態のリセット
-    temp_key = f"sel_temp_{target_key}"
-    if temp_key in st.session_state:
-        st.session_state[temp_key] = []
 
 # ==========================================
-# 3. Postflop Logic (Outs Calculation)
+# 3. Postflop Logic (Fixed Error Here)
 # ==========================================
 def get_best_straight_rank(ranks):
     uniq = sorted(list(set(ranks)))
@@ -139,39 +124,32 @@ def get_best_straight_rank(ranks):
     return best
 
 def calculate_detailed_outs(hand_cards, board_cards):
-    """
-    ストレート、フラッシュ、フルハウスのアウツ数とナッツ判定を行う
-    """
     deck_ranks = range(13)
     suits = ['s','h','d','c']
     used_cards = set((c.rank, c.suit) for c in hand_cards + board_cards)
     
+    # 修正: キーを統一
     outs = {
         'Straight': {'total': 0, 'nut': 0},
         'Flush': {'total': 0, 'nut': 0},
         'FullHouse': {'total': 0, 'nut': 0}
     }
     
-    # Pre-check current state
     current_all = hand_cards + board_cards
     current_ranks = [c.rank for c in current_all]
     has_flush = False
     for s in suits:
         if sum(1 for c in hand_cards if c.suit==s)>=2 and sum(1 for c in board_cards if c.suit==s)>=3: has_flush = True
-    has_fh = any(current_ranks.count(r)>=3 for r in current_ranks) and len(set(current_ranks)) < len(current_ranks) # Simplified FH check logic
+    has_fh = any(current_ranks.count(r)>=3 for r in current_ranks) and len(set(current_ranks)) < len(current_ranks)
     
-    # Iterate all unseen cards (approx 45 cards)
-    # This is fast enough for single hand analysis
     for r in deck_ranks:
         for s in suits:
             if (r, s) in used_cards: continue
             
-            # --- Simulation Context ---
             sim_board = board_cards + [SimpleCard(f"{'23456789TJQKA'[r]}{s}")]
             sim_all = hand_cards + sim_board
             sim_ranks = [c.rank for c in sim_all]
             
-            # 1. Flush Check
             is_flush_now = False
             flush_nut = False
             for st in suits:
@@ -179,17 +157,13 @@ def calculate_detailed_outs(hand_cards, board_cards):
                 b_c = sum(1 for c in sim_board if c.suit==st)
                 if h_c >= 2 and b_c >= 3:
                     is_flush_now = True
-                    # Nut check (Ace high flush?)
                     hand_s_ranks = [c.rank for c in hand_cards if c.suit==st]
-                    if 12 in hand_s_ranks: flush_nut = True # Simplification: Ace is nut
-                    # Technically needs to check if board blocks higher, but Ace is good approx
+                    if 12 in hand_s_ranks: flush_nut = True
             
             if is_flush_now and not has_flush:
                 outs['Flush']['total'] += 1
                 if flush_nut: outs['Flush']['nut'] += 1
             
-            # 2. Full House Check
-            # Logic: If we hit a set or trips that pairs the board
             is_fh_now = False
             rc = Counter(sim_ranks)
             threes = [k for k,v in rc.items() if v>=3]
@@ -198,25 +172,16 @@ def calculate_detailed_outs(hand_cards, board_cards):
             
             if is_fh_now and not has_fh and not is_flush_now:
                 outs['FullHouse']['total'] += 1
-                # FH Nut check is complex, treat top set as nut approx
-                # If board pair is high, our FH is strong
-                outs['FullHouse']['nut'] += 1 # Optimistic
+                outs['FullHouse']['nut'] += 1 
                 
-            # 3. Straight Check
-            # Only count if not Flush and not FH (Hierarchy)
             if not is_flush_now and not is_fh_now:
                 my_str = get_best_straight_rank(sim_ranks)
                 if my_str != -1:
-                    # It's a straight out
                     outs['Straight']['total'] += 1
-                    
-                    # Nut Straight Check
                     board_plus_r = [c.rank for c in board_cards] + [r]
-                    # Calc max possible straight with this board+r
                     br_set = set(board_plus_r)
                     possible_max = -1
-                    # Check all straights
-                    for top in range(4, 13): # 6-high to A-high
+                    for top in range(4, 13):
                         needed = {top, top-1, top-2, top-3, top-4}
                         if len(needed - br_set) <= 2: possible_max = top
                     if len({0,1,2,3,12} - br_set) <= 2: possible_max = max(possible_max, 3)
@@ -261,58 +226,10 @@ def load_flo8_data(csv_path="flo8_ranking.csv"):
     except: return None
 
 # ==========================================
-# 5. UI Components (New Button Selector)
-# ==========================================
-def render_card_selector_buttons(session_key):
-    # 一時保存用のキー
-    temp_key = f"sel_temp_{session_key}"
-    if temp_key not in st.session_state: st.session_state[temp_key] = []
-    
-    current = st.session_state[temp_key]
-    
-    with st.expander("🃏 Open Card Selector (Tap Buttons)", expanded=True):
-        # 現在の選択状態表示
-        st.write("Selected:")
-        if current:
-            st.markdown(render_hand_html(" ".join(current)), unsafe_allow_html=True)
-        else:
-            st.caption("No cards selected")
-            
-        c_act1, c_act2 = st.columns(2)
-        if c_act1.button("Clear", key=f"clr_{session_key}"):
-            st.session_state[temp_key] = []
-            st.rerun()
-        if c_act2.button("Apply / Close", key=f"apl_{session_key}", type="primary"):
-            if len(current) > 0:
-                set_input_callback(session_key, " ".join(current))
-            st.rerun()
-
-        st.divider()
-        
-        # タブでスート切り替え
-        tabs = st.tabs(["♠ Spades", "♥ Hearts", "♦ Diamonds", "♣ Clubs"])
-        ranks = list("AKQJT98765432")
-        suits = ['s', 'h', 'd', 'c']
-        suit_icons = ['♠', '♥', '♦', '♣']
-        
-        for i, tab in enumerate(tabs):
-            with tab:
-                cols = st.columns(4)
-                for r_idx, r in enumerate(ranks):
-                    card_str = f"{r}{suits[i]}"
-                    disabled = (card_str in current) or (len(current) >= 5) # Max 5 for board
-                    
-                    if cols[r_idx % 4].button(f"{r}{suit_icons[i]}", key=f"btn_{session_key}_{card_str}", disabled=disabled):
-                        current.append(card_str)
-                        st.session_state[temp_key] = current
-                        st.rerun()
-
-# ==========================================
-# 6. Main Logic
+# 5. Main Logic
 # ==========================================
 st.title("🃏 Omaha Hand Analyzer")
 
-# Init
 for k in ['plo_input', 'flo8_input', 'p1_fixed', 'p2_fixed', 'pf_board']:
     if k not in st.session_state: st.session_state[k] = ""
     tk = f"{k}_text"
@@ -353,7 +270,6 @@ if game_mode == "PLO (High Only)":
                 
             d_limit = st.slider("List Limit", 5, 50, 10)
             
-            # Filtering
             filtered_df = df_plo
             if sel_top: filtered_df = filtered_df[filtered_df["top_rank"].isin(sel_top)]
             if inc_tags: 
@@ -369,9 +285,17 @@ if game_mode == "PLO (High Only)":
         c1, c2 = st.columns([1, 1.3])
         with c1:
             st.subheader("🔍 Hand Input")
-            render_card_selector_buttons('plo_input')
             
-            inp_raw = st.text_input("Enter Hand", key='plo_input_text')
+            # ランダムボタン (メイン画面配置)
+            if st.button("🎲 Random Hand", key="rnd_plo"):
+                deck = []
+                for r in "AKQJT98765432":
+                    for s in "shdc": deck.append(f"{r}{s}")
+                rh = random.sample(deck, 4)
+                set_input_callback('plo_input', " ".join(rh))
+                st.rerun()
+
+            inp_raw = st.text_input("Enter Hand (e.g. As Ks Jd Th)", key='plo_input_text')
             if inp_raw != st.session_state.plo_input: st.session_state.plo_input = inp_raw
             
             inp = normalize_input_text(st.session_state.plo_input)
@@ -387,6 +311,7 @@ if game_mode == "PLO (High Only)":
                     m1.metric("Power Score",f"{sc:.1f}"); m2.metric("Equity",f"{eq:.1f}%"); m3.metric("Nut Eq",f"{ne:.1f}%")
                     st.write("🏷️ " + " ".join([f"`{t}`" for t in row['tags']]))
                     st.caption(f"Rank: {int(row['rank']):,} (Top {row['pct']:.1f}%)")
+                else: st.warning("Hand not found.")
 
         with c2:
             if 'row' in locals():
@@ -417,16 +342,6 @@ elif game_mode == "Postflop Range":
     st.header("📊 Postflop Range Analysis")
     if df_plo is not None:
         with st.sidebar:
-            st.markdown("### 🎲 Board")
-            if st.button("🎲 Random Board"):
-                deck = []
-                for r in "AKQJT98765432":
-                    for s in "shdc": deck.append(f"{r}{s}")
-                rb = random.sample(deck, 3)
-                st.session_state.pf_board = " ".join(rb)
-                st.rerun()
-
-            st.divider()
             st.markdown("### Player 1 (Blue)")
             p1_mode = st.selectbox("Type", ["Top %", "Fixed"], key="p1t")
             if "Top" in p1_mode: p1_val = st.select_slider("Top %", list(range(5,105,5)), value=15, key="p1v")
@@ -438,9 +353,17 @@ elif game_mode == "Postflop Range":
             else: p2_fix = st.text_input("Hand", key="p2f")
 
         st.subheader("1. Board Input")
-        render_card_selector_buttons('pf_board')
         
-        inp_board = st.text_input("Board Cards", key='pf_board_text')
+        # ランダムボタン (メイン画面配置)
+        if st.button("🎲 Random Flop"):
+            deck = []
+            for r in "AKQJT98765432":
+                for s in "shdc": deck.append(f"{r}{s}")
+            rb = random.sample(deck, 3)
+            st.session_state.pf_board = " ".join(rb)
+            st.rerun()
+
+        inp_board = st.text_input("Board Cards (3-5)", key='pf_board_text')
         if inp_board != st.session_state.pf_board: st.session_state.pf_board = inp_board
         
         b_cards = normalize_input_text(st.session_state.pf_board)
@@ -468,18 +391,15 @@ elif game_mode == "Postflop Range":
                         b_objs = [SimpleCard(c) for c in b_cards]
                         
                         def analyze(h_list):
-                            stats = defaultdict(float) # Avg outs
-                            counts = defaultdict(int) # Hits count
                             total = len(h_list)
-                            
-                            cats_agg = {'Str':0, 'Fls':0, 'FH':0}
-                            nut_agg = {'Str':0, 'Fls':0, 'FH':0}
+                            # エラー修正: キーを統一
+                            cats_agg = {'Straight':0, 'Flush':0, 'FullHouse':0}
+                            nut_agg = {'Straight':0, 'Flush':0, 'FullHouse':0}
                             
                             for h_str in h_list:
                                 h_objs = [SimpleCard(c) for c in h_str.split()]
                                 outs = calculate_detailed_outs(h_objs, b_objs)
                                 
-                                # Summing outs
                                 for k in ['Straight','Flush','FullHouse']:
                                     cats_agg[k] += outs[k]['total']
                                     nut_agg[k] += outs[k]['nut']
@@ -493,8 +413,8 @@ elif game_mode == "Postflop Range":
                         st.subheader("🎯 Average Outs Analysis")
                         
                         # Graph
-                        labels = ["Straight", "Flush", "Full House"]
-                        keys = ['Str', 'Fls', 'FH']
+                        labels = ["Straight", "Flush", "FullHouse"]
+                        keys = ['Straight', 'Flush', 'FullHouse']
                         
                         fig, ax = plt.subplots(figsize=(8, 4))
                         x = np.arange(len(labels))
@@ -524,15 +444,13 @@ elif game_mode == "Postflop Range":
                         ax.grid(axis='y', ls='--', alpha=0.3)
                         
                         st.pyplot(fig)
-                        
-                        st.caption("※棒グラフの濃い色が『ナッツ級アウツ』、薄い色が『それ以外のアウツ』の平均枚数です。")
+                        st.caption("※棒グラフ: 濃い色=ナッツアウツ平均, 薄い色=非ナッツアウツ平均")
 
 # -----------------
-# FLO8 & Guide (Simplified for space)
+# FLO8 & Guide
 # -----------------
 elif game_mode == "FLO8 (Hi/Lo)":
     st.header("⚖️ FLO8 Strategy")
-    render_card_selector_buttons('flo8_input')
     i8 = normalize_input_text(st.text_input("Hand", key='flo8_input_text'))
     if i8:
         st.markdown(render_hand_html(" ".join(i8)), unsafe_allow_html=True)
@@ -544,8 +462,8 @@ elif game_mode == "FLO8 (Hi/Lo)":
 elif game_mode == "Guide":
     st.header("📖 Guide")
     st.markdown("### Update Info")
-    st.markdown("- **Card Selector**: Button type for mobile.")
-    st.markdown("- **Postflop**: Added 'Random Board' and detailed Outs Graph (Nut vs Non-Nut).")
+    st.markdown("- **UI**: Simplified text inputs with random buttons.")
+    st.markdown("- **Postflop**: Detailed Outs Analysis (Nut vs Non-Nut) for Str/Flush/FH.")
 
 with st.sidebar:
     st.markdown("---")
