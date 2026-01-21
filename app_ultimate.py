@@ -6,22 +6,16 @@ import unicodedata
 from heuristics import calculate_flo8_heuristic
 
 # ==========================================
-# 1. Config & Styles (CSS Fixes)
+# 1. Config & Styles
 # ==========================================
 st.set_page_config(page_title="Omaha Hand Analyzer", layout="wide")
 
-# CSSによるスマホUI調整
+# CSS: スマホでのプルダウン表示位置などを調整
 st.markdown("""
 <style>
     /* マルチセレクトのドロップダウンがヘッダーの下に隠れないようにz-indexを調整 */
     ul[data-testid="stSelectboxVirtualDropdown"] {
         z-index: 99999 !important;
-    }
-    /* スマホでボタンを押しやすくする */
-    div.stButton > button {
-        width: 100%;
-        border-radius: 8px;
-        height: 3em;
     }
     /* サイドバーの余白調整 */
     section[data-testid="stSidebar"] .block-container {
@@ -118,10 +112,12 @@ def set_input_callback(target_key, value):
     if widget_key in st.session_state:
         st.session_state[widget_key] = value
     
-    # 選択リスト(temporary)のリセット
-    temp_key = f"temp_picker_{target_key}"
-    if temp_key in st.session_state:
-        st.session_state[temp_key] = []
+    # 選択リストのリセット (Selectorとの同期用)
+    # Multiselectのキーをリセットする
+    for s in ['s','h','d','c']:
+        ms_key = f"ms_{s}_{target_key}"
+        if ms_key in st.session_state:
+            st.session_state[ms_key] = []
 
 # ==========================================
 # 3. Data Loading
@@ -160,61 +156,41 @@ def load_flo8_data(csv_path="flo8_ranking.csv"):
     except: return None
 
 # ==========================================
-# 4. UI Components (Improved Card Picker)
+# 4. UI Components (Reverted to Multiselect)
 # ==========================================
 def render_card_selector(session_key):
-    # Expanderの開閉状態管理
-    expander_state_key = f"expander_open_{session_key}"
-    if expander_state_key not in st.session_state:
-        st.session_state[expander_state_key] = False
-
-    with st.expander("🃏 Open Card Selector (Tap Buttons)", expanded=st.session_state[expander_state_key]):
-        # 一時保存用のリストを初期化
-        temp_key = f"temp_picker_{session_key}"
-        if temp_key not in st.session_state:
-            st.session_state[temp_key] = []
+    with st.expander("🃏 Open Card Selector (by Suit)", expanded=False):
+        ranks_list = list("AKQJT98765432")
+        c_s, c_h, c_d, c_c = st.columns(4)
         
-        current_selection = st.session_state[temp_key]
+        # 以前の仕様（スート別Multiselect）に戻しました
+        with c_s:
+            st.markdown("**♠ Spades**")
+            sel_s = st.multiselect("Spades", ranks_list, key=f"ms_s_{session_key}", label_visibility="collapsed")
+        with c_h:
+            st.markdown("**:red[♥ Hearts]**")
+            sel_h = st.multiselect("Hearts", ranks_list, key=f"ms_h_{session_key}", label_visibility="collapsed")
+        with c_d:
+            st.markdown("**:blue[♦ Diamonds]**")
+            sel_d = st.multiselect("Diamonds", ranks_list, key=f"ms_d_{session_key}", label_visibility="collapsed")
+        with c_c:
+            st.markdown("**:green[♣ Clubs]**")
+            sel_c = st.multiselect("Clubs", ranks_list, key=f"ms_c_{session_key}", label_visibility="collapsed")
 
-        # 現在の選択状態を表示
-        st.caption("Tap 4 cards:")
-        if current_selection:
-            st.markdown(render_hand_html(" ".join(current_selection)), unsafe_allow_html=True)
-            if st.button("Clear", key=f"clear_{session_key}"):
-                st.session_state[temp_key] = []
+        collected = [f"{r}s" for r in sel_s] + [f"{r}h" for r in sel_h] + [f"{r}d" for r in sel_d] + [f"{r}c" for r in sel_c]
+
+        if len(collected) == 4:
+            final_hand = " ".join(collected)
+            # 現在値と異なれば更新してリラン
+            if st.session_state.get(session_key) != final_hand:
+                st.session_state[session_key] = final_hand
+                st.session_state[f"{session_key}_text"] = final_hand
                 st.rerun()
-        else:
-            st.markdown("<div style='height:40px; color:#999;'>No cards selected</div>", unsafe_allow_html=True)
-
-        st.divider()
-
-        # タブでスート切り替え (ボタン方式 = キーボードが出ない)
-        t_s, t_h, t_d, t_c = st.tabs(["♠", "♥", "♦", "♣"])
+            return collected
+        elif len(collected) > 0:
+            st.caption(f"Selected: {len(collected)}/4 cards.")
         
-        ranks = list("AKQJT98765432")
-        
-        def draw_suit_grid(suit_char, suit_icon):
-            cols = st.columns(4) # スマホで押しやすい4列
-            for i, r in enumerate(ranks):
-                card_val = f"{r}{suit_char}"
-                # 既に選ばれているか、4枚以上なら無効化
-                is_disabled = (card_val in current_selection) or (len(current_selection) >= 4)
-                
-                if cols[i % 4].button(f"{r}{suit_icon}", key=f"btn_{session_key}_{card_val}", disabled=is_disabled):
-                    current_selection.append(card_val)
-                    st.session_state[temp_key] = current_selection
-                    
-                    # 4枚揃ったら確定処理
-                    if len(current_selection) == 4:
-                        final_hand = " ".join(current_selection)
-                        set_input_callback(session_key, final_hand)
-                        st.session_state[temp_key] = [] # リセット
-                    st.rerun()
-
-        with t_s: draw_suit_grid('s', '♠')
-        with t_h: draw_suit_grid('h', '♥')
-        with t_d: draw_suit_grid('d', '♦')
-        with t_c: draw_suit_grid('c', '♣')
+    return []
 
 # ==========================================
 # 5. Main Application Logic
@@ -242,7 +218,7 @@ if game_mode == "PLO (High Only)":
     if df_plo is None:
         st.warning("Data loading failed. Please upload 'plo_detailed_ranking.zip'.")
     else:
-        # Common Variables
+        # Variables
         ranks_opt = list("AKQJT98765432")
         avail_tags = ["AA","KK","QQ","Double Pair","Double Suited","Single Suited","A-High Suit","Rainbow","Monotone","Broadway","Perfect Rundown","Double Gap Rundown"]
         
@@ -542,7 +518,7 @@ elif game_mode == "Guide":
     st.markdown("#### A. ハンド入力 (Hand Input)")
     st.write("2通りの方法でハンドを入力できます。")
     st.markdown("""
-    1. **🃏 Open Card Selector**: スートごとに分かれたボタンから、タップで4枚を選択します（スマホ対応）。
+    1. **🃏 Open Card Selector**: スートごとに分かれたパネルから、4枚を選択します（スマホ対応）。
     2. **テキスト入力**: `As Ks Jd Th` のように直接入力します（大文字小文字区別なし）。
     """)
     
