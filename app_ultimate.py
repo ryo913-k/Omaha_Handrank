@@ -3,6 +3,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import unicodedata
+import random
+from collections import Counter
 from heuristics import calculate_flo8_heuristic
 
 # ==========================================
@@ -10,22 +12,17 @@ from heuristics import calculate_flo8_heuristic
 # ==========================================
 st.set_page_config(page_title="Omaha Hand Analyzer", layout="wide")
 
-# CSS: スマホでのプルダウン表示位置などを調整
 st.markdown("""
 <style>
-    /* マルチセレクトのドロップダウンがヘッダーの下に隠れないようにz-indexを調整 */
-    ul[data-testid="stSelectboxVirtualDropdown"] {
-        z-index: 99999 !important;
-    }
-    /* サイドバーの余白調整 */
-    section[data-testid="stSidebar"] .block-container {
-        padding-top: 2rem;
-    }
+    /* マルチセレクトのドロップダウン調整 */
+    ul[data-testid="stSelectboxVirtualDropdown"] { z-index: 99999 !important; }
+    /* サイドバー余白 */
+    section[data-testid="stSidebar"] .block-container { padding-top: 2rem; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. Helper Classes & Functions
+# 2. Helper Classes & Functions (Basic)
 # ==========================================
 class SimpleCard:
     def __init__(self, card_str):
@@ -45,13 +42,13 @@ def normalize_input_text(text):
         if len(p) >= 2: cleaned.append(p[:-1].upper() + p[-1].lower())
     return cleaned
 
-def render_hand_html(hand_str):
+def render_hand_html(hand_str, size=40):
     if not hand_str: return ""
     cards = hand_str.split()
     suit_map = {'s': '♠', 'h': '♥', 'd': '♦', 'c': '♣'}
     color_map = {'s': 'black', 'h': '#d32f2f', 'd': '#1976d2', 'c': '#388e3c'}
     
-    html = "<div style='display:flex; gap:8px; margin-bottom:10px; flex-wrap: wrap;'>"
+    html = "<div style='display:flex; gap:4px; margin-bottom:5px; flex-wrap: wrap;'>"
     for c in cards:
         if len(c) < 2: continue
         rank = c[:-1]
@@ -60,11 +57,11 @@ def render_hand_html(hand_str):
         color = color_map.get(suit, 'black')
         
         style = (
-            f"width:45px; height:60px; background-color:white; "
-            f"border:1px solid #bbb; border-radius:6px; "
+            f"width:{size}px; height:{size*1.4}px; background-color:white; "
+            f"border:1px solid #bbb; border-radius:4px; "
             f"display:flex; justify-content:center; align-items:center; "
-            f"font-size:20px; font-weight:bold; color:{color}; "
-            f"box-shadow:2px 2px 5px rgba(0,0,0,0.1);"
+            f"font-size:{size*0.45}px; font-weight:bold; color:{color}; "
+            f"box-shadow:1px 1px 3px rgba(0,0,0,0.1);"
         )
         html += f"<div style='{style}'>{rank}{symbol}</div>"
     html += "</div>"
@@ -87,8 +84,7 @@ def get_hand_tags(hand_str):
     elif len(set(ranks))==4: tags.append("No Pair")
 
     sc = {s: suits.count(s) for s in suits}
-    sv = sorted(sc.values(), reverse=True)
-    s_dist = sv + [0]*(4-len(sv))
+    s_dist = sorted(sc.values(), reverse=True) + [0]*(4-len(sc))
     is_ds = (s_dist[0]==2 and s_dist[1]==2)
     is_mono = (s_dist[0]==4)
     is_ss = (s_dist[0]>=2 and not is_ds and not is_mono)
@@ -111,16 +107,114 @@ def set_input_callback(target_key, value):
     widget_key = f"{target_key}_text"
     if widget_key in st.session_state:
         st.session_state[widget_key] = value
-    
-    # 選択リストのリセット (Selectorとの同期用)
-    # Multiselectのキーをリセットする
-    for s in ['s','h','d','c']:
-        ms_key = f"ms_{s}_{target_key}"
+    for suit in ['s', 'h', 'd', 'c']:
+        ms_key = f"ms_{suit}_{target_key}"
         if ms_key in st.session_state:
             st.session_state[ms_key] = []
 
 # ==========================================
-# 3. Data Loading
+# 3. Postflop Evaluator (Lightweight)
+# ==========================================
+def evaluate_hits(hand_cards, board_cards):
+    """
+    ハンドとボードを組み合わせて役とドローを簡易判定する
+    """
+    all_cards = hand_cards + board_cards
+    ranks = [c.rank for c in all_cards]
+    suits = [c.suit for c in all_cards]
+    
+    board_ranks = [c.rank for c in board_cards]
+    board_suits = [c.suit for c in board_cards]
+    hand_suits = [c.suit for c in hand_cards]
+    
+    # --- Made Hands ---
+    made = "High Card"
+    score = 0
+    
+    # Flush (Hand2 + Board3 definition for PLO is strict, but simplifying here for "Hit")
+    # PLO Rule: Must use exactly 2 from hand, 3 from board.
+    # Check max flush
+    is_flush = False
+    for s in ['s','h','d','c']:
+        h_cnt = sum(1 for c in hand_cards if c.suit == s)
+        b_cnt = sum(1 for c in board_cards if c.suit == s)
+        if h_cnt >= 2 and b_cnt >= 3:
+            is_flush = True; break
+            
+    # Pairs / Sets (Board interaction)
+    rc = Counter(ranks)
+    # Check Straight (Simple version)
+    uniq_ranks = sorted(list(set(ranks)))
+    is_straight = False
+    if len(uniq_ranks) >= 5:
+        for i in range(len(uniq_ranks)-4):
+            if uniq_ranks[i+4] - uniq_ranks[i] == 4:
+                is_straight = True
+        # Wheel (A,2,3,4,5)
+        if {0,1,2,3,12}.issubset(set(uniq_ranks)): is_straight = True
+
+    # Quads / Full House
+    is_quads = any(c == 4 for c in rc.values())
+    is_fh = (any(c == 3 for c in rc.values()) and any(c >= 2 for k,c in rc.items() if rc[k]!=3 or list(rc.values()).count(3)>1))
+    
+    if is_quads: made = "Quads"; score=8
+    elif is_fh: made = "Full House"; score=7
+    elif is_flush: made = "Flush"; score=6
+    elif is_straight: made = "Straight"; score=5
+    else:
+        # Sets / Trips / Two Pair
+        # Set: Hand Pair + Board match OR Hand 1 + Board Pair? 
+        # Strict PLO Set: Pocket Pair + 1 on board
+        h_rc = Counter([c.rank for c in hand_cards])
+        b_rc = Counter([c.rank for c in board_cards])
+        
+        has_set = False # Pocket Pair hits board
+        has_trips = False # Hand 1 + Board Pair
+        
+        for r in h_rc:
+            if h_rc[r] == 2 and b_rc[r] == 1: has_set = True
+            if h_rc[r] == 1 and b_rc[r] == 2: has_trips = True
+            if h_rc[r] == 1 and b_rc[r] == 1: pass # Pair
+        
+        # Two Pair check
+        # Simplified: Just count total pairs
+        pair_count = sum(1 for c in rc.values() if c >= 2)
+        
+        if has_set: made = "Set"; score=4
+        elif has_trips: made = "Trips"; score=3
+        elif pair_count >= 2: made = "Two Pair"; score=2
+        elif pair_count == 1:
+            # Check if Top Pair (Hand matches highest board card)
+            max_b = max(board_ranks) if board_ranks else -1
+            if max_b in [c.rank for c in hand_cards]: made = "Top Pair"; score=1.5
+            # Overpair
+            elif any(c.rank > max_b for c in hand_cards if h_rc[c.rank]==2): made = "Overpair"; score=1.8
+            else: made = "Weak Pair"; score=1
+    
+    # --- Draws (Flop/Turn Only) ---
+    draws = []
+    if len(board_cards) <= 4:
+        # Flush Draw (Hand 2 + Board 2)
+        for s in ['s','h','d','c']:
+            h_cnt = sum(1 for c in hand_cards if c.suit == s)
+            b_cnt = sum(1 for c in board_cards if c.suit == s)
+            if h_cnt >= 2 and b_cnt == 2:
+                # Check if Nut FD
+                board_max_s = max([c.rank for c in board_cards if c.suit==s]) if b_cnt>0 else -1
+                hand_max_s = max([c.rank for c in hand_cards if c.suit==s]) if h_cnt>0 else -1
+                
+                # Simple Nut check (A or K if A on board)
+                is_nut = False
+                if hand_max_s == 12: is_nut = True # Ace
+                
+                if is_nut: draws.append("Nut Flush Draw")
+                else: draws.append("Flush Draw")
+                break
+    
+    return made, score, draws
+
+# ==========================================
+# 4. Data Loading
 # ==========================================
 @st.cache_data
 def load_plo_data(csv_path="plo_detailed_ranking.zip"):
@@ -156,14 +250,13 @@ def load_flo8_data(csv_path="flo8_ranking.csv"):
     except: return None
 
 # ==========================================
-# 4. UI Components (Reverted to Multiselect)
+# 5. UI Components
 # ==========================================
 def render_card_selector(session_key):
     with st.expander("🃏 Open Card Selector (by Suit)", expanded=False):
         ranks_list = list("AKQJT98765432")
         c_s, c_h, c_d, c_c = st.columns(4)
         
-        # 以前の仕様（スート別Multiselect）に戻しました
         with c_s:
             st.markdown("**♠ Spades**")
             sel_s = st.multiselect("Spades", ranks_list, key=f"ms_s_{session_key}", label_visibility="collapsed")
@@ -181,7 +274,6 @@ def render_card_selector(session_key):
 
         if len(collected) == 4:
             final_hand = " ".join(collected)
-            # 現在値と異なれば更新してリラン
             if st.session_state.get(session_key) != final_hand:
                 st.session_state[session_key] = final_hand
                 st.session_state[f"{session_key}_text"] = final_hand
@@ -193,22 +285,27 @@ def render_card_selector(session_key):
     return []
 
 # ==========================================
-# 5. Main Application Logic
+# 6. Main Application Logic
 # ==========================================
 st.title("🃏 Omaha Hand Analyzer")
 
-# Init Session State
-if 'plo_input' not in st.session_state: st.session_state.plo_input = "As Ks Jd Th"
-if 'flo8_input' not in st.session_state: st.session_state.flo8_input = "Ad Ah 2s 3d"
-if 'plo_input_text' not in st.session_state: st.session_state.plo_input_text = st.session_state.plo_input
-if 'flo8_input_text' not in st.session_state: st.session_state.flo8_input_text = st.session_state.flo8_input
+# Init Session
+for k in ['plo_input', 'flo8_input', 'p1_fixed', 'p2_fixed', 'pf_board']:
+    if k not in st.session_state: st.session_state[k] = ""
+if st.session_state.plo_input == "": st.session_state.plo_input = "As Ks Jd Th"
+if st.session_state.flo8_input == "": st.session_state.flo8_input = "Ad Ah 2s 3d"
+
+# Ensure text keys exist
+for k in ['plo_input', 'flo8_input', 'p1_fixed', 'p2_fixed', 'pf_board']:
+    tk = f"{k}_text"
+    if tk not in st.session_state: st.session_state[tk] = st.session_state[k]
 
 df_plo = load_plo_data()
 df_flo8 = load_flo8_data()
 
 with st.sidebar:
     st.title("Navigation")
-    game_mode = st.radio("Game Mode", ["PLO (High Only)", "FLO8 (Hi/Lo)", "Guide"], label_visibility="collapsed")
+    game_mode = st.radio("Game Mode", ["PLO (High Only)", "Postflop Range", "FLO8 (Hi/Lo)", "Guide"], label_visibility="collapsed")
     st.divider()
 
 # ==========================================
@@ -222,15 +319,12 @@ if game_mode == "PLO (High Only)":
         ranks_opt = list("AKQJT98765432")
         avail_tags = ["AA","KK","QQ","Double Pair","Double Suited","Single Suited","A-High Suit","Rainbow","Monotone","Broadway","Perfect Rundown","Double Gap Rundown"]
         
-        # --- SIDEBAR START ---
         with st.sidebar:
-            # 1. Scenario
             with st.expander("1. ⚙️ Scenario", expanded=False):
                 spr = st.select_slider("Stack Depth / SPR", ["Short","Medium","Deep","Very Deep"], value="Medium")
                 nw = 0.0 if "Short" in spr else 0.3 if "Medium" in spr else 0.6 if "Deep" in spr else 0.8
                 st.caption(f"Nut Weight: {nw*100:.0f}%")
 
-            # 2. Hand Rank
             with st.expander("2. 🔍 Hand Rank", expanded=False):
                 c_rk1, c_rk2 = st.columns([1,2])
                 with c_rk1:
@@ -246,19 +340,16 @@ if game_mode == "PLO (High Only)":
                 if not fr.empty:
                     st.caption(f"**{r['hand']}** (Top {r['pct']:.2f}%)")
 
-            # 3. Highlights
             with st.expander("3. 🎨 Highlights", expanded=False):
                 hl_tags_1 = st.multiselect("Group 1 (🔴 Red)", avail_tags, key="hl1")
                 hl_tags_2 = st.multiselect("Group 2 (🔵 Blue)", avail_tags, key="hl2")
                 hl_tags_3 = st.multiselect("Group 3 (🟢 Green)", avail_tags, key="hl3")
 
-            # 4. Filter
             with st.expander("4. 🏷️ Filter", expanded=True):
                 sel_top = st.multiselect("Top Rank", ranks_opt)
                 inc_tags = st.multiselect("Include", avail_tags)
                 exc_tags = st.multiselect("Exclude", avail_tags)
 
-            # Results List
             st.divider()
             d_limit = st.slider("List Limit", 5, 100, 20, 5)
 
@@ -291,7 +382,6 @@ if game_mode == "PLO (High Only)":
                     st.caption(f"Found: {len(filtered_df):,}")
                 else: st.write("No hands found.")
             elif not (sel_top or inc_tags or exc_tags): st.write("(No filters)")
-        # --- SIDEBAR END ---
 
         # --- MAIN CONTENT ---
         st.header("🔥 PLO Strategy")
@@ -302,8 +392,7 @@ if game_mode == "PLO (High Only)":
             render_card_selector('plo_input')
             
             inp_raw = st.text_input("Enter Hand (Text)", key='plo_input_text')
-            if inp_raw != st.session_state.plo_input:
-                st.session_state.plo_input = inp_raw
+            if inp_raw != st.session_state.plo_input: st.session_state.plo_input = inp_raw
 
             inp = normalize_input_text(st.session_state.plo_input)
             if inp: st.markdown(render_hand_html(" ".join(inp)), unsafe_allow_html=True)
@@ -347,15 +436,12 @@ if game_mode == "PLO (High Only)":
             st.divider()
             cc1, cc2 = st.columns(2)
             
-            # --- Equity Curve ---
             with cc1:
                 st.subheader("📈 Equity Curve")
                 seek_pct = st.slider("🔍 Seek Hand Strength (Top X%)", 0.0, 100.0, 10.0, 0.1)
-                
                 s_idx = int(len(df_plo) * (seek_pct / 100))
                 if s_idx >= len(df_plo): s_idx = len(df_plo) - 1
                 s_row = df_plo.iloc[s_idx]
-
                 st.info(f"**Top {seek_pct:.1f}% Boundary**")
                 sk1, sk2 = st.columns([3, 1])
                 with sk1:
@@ -373,7 +459,6 @@ if game_mode == "PLO (High Only)":
                 ax3.set_xlabel("Top X%"); ax3.set_ylabel("Equity")
                 st.pyplot(fig3)
 
-            # --- Scatter Plot ---
             with cc2:
                 st.subheader("🌌 Equity Scatter")
                 cmode = st.radio("Scatter", ["Mode A", "Mode B"], horizontal=True, label_visibility="collapsed")
@@ -404,7 +489,6 @@ if game_mode == "PLO (High Only)":
                     ymin, ymax = min(ymin, fy.min()), max(ymax, fy.max())
                     focused = True
                 
-                # Highlights
                 groups = [(hl_tags_1, 'crimson', 'Grp1(Red)'), 
                           (hl_tags_2, 'dodgerblue', 'Grp2(Blu)'), 
                           (hl_tags_3, 'limegreen', 'Grp3(Grn)')]
@@ -442,6 +526,127 @@ if game_mode == "PLO (High Only)":
                 ax2.grid(True, ls='--', alpha=0.3)
                 ax2.legend(fontsize=8, loc='upper left')
                 st.pyplot(fig2)
+
+# ==========================================
+# MODE: Postflop Range
+# ==========================================
+elif game_mode == "Postflop Range":
+    st.header("📊 Postflop Range Analysis")
+    
+    if df_plo is None:
+        st.warning("DB not loaded.")
+    else:
+        # --- Sidebar Controls ---
+        with st.sidebar:
+            st.markdown("### Player Settings")
+            
+            # P1
+            st.markdown("**Player 1**")
+            p1_mode = st.selectbox("P1 Type", ["Top % Range", "Fixed Hand"], key="p1_type")
+            if "Range" in p1_mode:
+                p1_range_val = st.select_slider("P1 Top %", options=[5,10,15,20,25,30,40,50,100], value=15)
+            else:
+                p1_fixed = st.text_input("P1 Hand", key="p1_fixed_text")
+                if p1_fixed != st.session_state.p1_fixed: st.session_state.p1_fixed = p1_fixed
+
+            st.divider()
+
+            # P2
+            st.markdown("**Player 2**")
+            p2_mode = st.selectbox("P2 Type", ["Top % Range", "Fixed Hand"], key="p2_type")
+            if "Range" in p2_mode:
+                p2_range_val = st.select_slider("P2 Top %", options=[5,10,15,20,25,30,40,50,100], value=50)
+            else:
+                p2_fixed = st.text_input("P2 Hand", key="p2_fixed_text")
+                if p2_fixed != st.session_state.p2_fixed: st.session_state.p2_fixed = p2_fixed
+
+        # --- Main Area ---
+        st.subheader("1. Board Input")
+        render_card_selector('pf_board')
+        
+        pf_board_raw = st.text_input("Board Cards (3-5 cards)", key='pf_board_text', placeholder="e.g. Ks 7d 2c")
+        if pf_board_raw != st.session_state.pf_board: st.session_state.pf_board = pf_board_raw
+        
+        board_cards = normalize_input_text(st.session_state.pf_board)
+        if board_cards: st.markdown(render_hand_html(" ".join(board_cards), size=50), unsafe_allow_html=True)
+
+        if st.button("🚀 Analyze Range Hits", type="primary"):
+            if len(board_cards) < 3:
+                st.error("Please enter at least 3 board cards.")
+            else:
+                with st.spinner("Analyzing Ranges..."):
+                    # Sample Hands
+                    def get_hands_from_range(mode, range_val, fixed_val, df):
+                        if "Fixed" in mode:
+                            h = normalize_input_text(fixed_val)
+                            return [" ".join(h)] if len(h)==4 else []
+                        else:
+                            # Filter DF
+                            limit_rank = int(len(df) * (range_val / 100))
+                            sub = df.iloc[:limit_rank]
+                            # Sampling
+                            sample_size = 3000
+                            if len(sub) > sample_size:
+                                return sub["hand"].sample(sample_size).tolist()
+                            return sub["hand"].tolist()
+
+                    p1_hands = get_hands_from_range(p1_mode, p1_range_val if "Range" in p1_mode else "", st.session_state.p1_fixed, df_plo)
+                    p2_hands = get_hands_from_range(p2_mode, p2_range_val if "Range" in p2_mode else "", st.session_state.p2_fixed, df_plo)
+
+                    if not p1_hands or not p2_hands:
+                        st.error("Invalid hand input.")
+                    else:
+                        # Logic
+                        from collections import defaultdict
+                        
+                        def analyze_list(h_list, b_objs):
+                            stats = defaultdict(int)
+                            draws_stats = defaultdict(int)
+                            total = len(h_list)
+                            for h_str in h_list:
+                                h_objs = [SimpleCard(c) for c in h_str.split()]
+                                made, score, draws = evaluate_hits(h_objs, b_objs)
+                                stats[made] += 1
+                                for d in draws: draws_stats[d] += 1
+                            
+                            # Normalize
+                            return {k: v/total*100 for k,v in stats.items()}, {k: v/total*100 for k,v in draws_stats.items()}
+
+                        board_objs = [SimpleCard(c) for c in board_cards]
+                        p1_made, p1_draw = analyze_list(p1_hands, board_objs)
+                        p2_made, p2_draw = analyze_list(p2_hands, board_objs)
+
+                        # Visualization
+                        st.divider()
+                        c_plot1, c_plot2 = st.columns(2)
+                        
+                        cats_made = ["Quads", "Full House", "Flush", "Straight", "Set", "Trips", "Two Pair", "Overpair", "Top Pair"]
+                        cats_draw = ["Nut Flush Draw", "Flush Draw"]
+
+                        def plot_comp(cats, p1_data, p2_data, title):
+                            p1_vals = [p1_data.get(c, 0) for c in cats]
+                            p2_vals = [p2_data.get(c, 0) for c in cats]
+                            
+                            fig, ax = plt.subplots(figsize=(5,4))
+                            y = np.arange(len(cats))
+                            h = 0.35
+                            ax.barh(y + h/2, p1_vals, h, label='P1', color='dodgerblue')
+                            ax.barh(y - h/2, p2_vals, h, label='P2', color='crimson')
+                            ax.set_yticks(y)
+                            ax.set_yticklabels(cats)
+                            ax.set_xlabel("Freq (%)")
+                            ax.set_title(title)
+                            ax.legend()
+                            ax.grid(axis='x', linestyle='--', alpha=0.5)
+                            return fig
+
+                        with c_plot1:
+                            st.write("##### Made Hands")
+                            st.pyplot(plot_comp(cats_made, p1_made, p2_made, "Made Hand Distribution"))
+                        
+                        with c_plot2:
+                            st.write("##### Draws (Flop/Turn)")
+                            st.pyplot(plot_comp(cats_draw, p1_draw, p2_draw, "Draw Distribution"))
 
 # ==========================================
 # MODE: FLO8
@@ -507,75 +712,60 @@ elif game_mode == "Guide":
     st.subheader("1. 画面の切り替え")
     st.info("サイドバーの一番上にある **[Game Mode]** でモードを切り替えます。")
     st.markdown("""
-    - **🔥 PLO (High Only)**: 通常のオマハ（ハイのみ）。詳細な勝率データとナッツポテンシャル分析が可能です。
-    - **⚖️ FLO8 (Hi/Lo)**: ハイロー（エイトオアベター）。Hutchinsonポイントとスクープ率を表示します。
+    - **🔥 PLO (High Only)**: 通常のオマハ。勝率データとナッツポテンシャル分析。
+    - **📊 Postflop Range**: フロップ以降のレンジ分析。お互いのレンジがボードにどう絡んでいるかを可視化します。
+    - **⚖️ FLO8 (Hi/Lo)**: ハイロー。Hutchinsonポイントとスクープ率。
     """)
 
     st.divider()
 
     st.subheader("2. 🔥 PLO モードの機能")
     
-    st.markdown("#### A. ハンド入力 (Hand Input)")
+    st.markdown("#### A. ハンド入力")
     st.write("2通りの方法でハンドを入力できます。")
     st.markdown("""
-    1. **🃏 Open Card Selector**: スートごとに分かれたパネルから、4枚を選択します（スマホ対応）。
+    1. **🃏 Open Card Selector**: スートごとに分かれたパネルから、クリックで4枚を選択します（スマホ対応）。
     2. **テキスト入力**: `As Ks Jd Th` のように直接入力します（大文字小文字区別なし）。
     """)
     
-    st.markdown("#### B. 分析指標 (Metrics)")
+    st.markdown("#### B. 分析指標")
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("""
-        - **Power Score**: 勝率に加え、「ナッツの作りやすさ」と「SPR（スタック比）」を考慮した総合スコアです。
-        - **Raw Equity**: 単純なオールイン勝率です。
-        - **Nut Equity**: ナッツ級の役（フラッシュ、フルハウス以上）で勝つ確率です。
+        - **Power Score**: 勝率 + ナッツの作りやすさ + SPRを考慮した総合スコア。
+        - **Raw Equity**: 単純なオールイン勝率。
+        - **Nut Equity**: ナッツ級の役で勝つ確率。
         """)
     with col2:
         st.markdown("""
-        - **Tags**: ハンドの特徴（`Double Suited`, `Rundown` など）を自動判定します。
-        - **Global Rank**: 全ハンド中の順位を表示します（例: Top 1.5%）。
+        - **Tags**: `Double Suited`, `Rundown` などの特徴判定。
+        - **Global Rank**: 全ハンド中の順位（Top X%）。
         """)
 
     st.markdown("#### C. グラフ分析")
     st.markdown("""
-    - **📊 Win Distribution (円グラフ)** 「どのような役で勝つか」の内訳です。ナッツ級（ストレート以上）が多いほど強いハンドと言えます。
-      
-    - **📈 Equity Curve (順位曲線)** あなたのハンドが全体の中でどの位置にいるかを可視化します。
-      > **💡 シークバー機能**: グラフ上のバーを動かすと、「上位10%の境界線にあるハンドは何か？」などを逆引きして分析できます。
-
-    - **🌌 Equity Scatter (散布図)** 「勝率(X軸)」と「ナッツ品質(Y軸)」のバランスを見ます。
-      - 右上にあるほど最強です。
-      - **Highlight機能**: サイドバーで設定した条件（赤・青・緑）のハンドがどこに分布しているかを確認できます。
+    - **📊 Win Distribution (円グラフ)** どの役で勝つかを表示。
+    - **📈 Equity Curve (順位曲線)** 全体の中での位置。**シークバー**で上位X%のハンドを逆引き可能。
+    - **🌌 Equity Scatter (散布図)** 「勝率」と「ナッツ品質」のバランス。サイドバーで3色ハイライト設定可能。
     """)
-
-    st.divider()
-
-    st.subheader("3. ⚖️ FLO8 モードの機能")
-    st.markdown("""
-    FLO8は「ハイ」と「ロー」の両方を狙うゲームです。
     
-    - **Hutchinson Points**:  
-      FLO8の著名な評価システムです。一般的に **20ポイント以上** がプレイ可能なハンドとされています。
-      - 棒グラフで「High Pair」「Low Potential」などの内訳を表示します。
-      
-    - **Scoop / Equity**:  
-      - **Scoop %**: ハイとローの両方を取る（総取り）確率。最も重要な指標です。
-      - **High/Low Eq**: それぞれのポットを獲得する確率です。
+    st.divider()
+    
+    st.subheader("3. 📊 Postflop Range モード")
+    st.markdown("""
+    **「自分のレンジ（例：上位15%）は、このフロップでどれくらい強いのか？」** を分析します。
+    
+    1. **Player設定**: P1とP2のレンジ（Top %）または固定ハンドを設定。
+    2. **Board入力**: フロップ（3枚）〜リバー（5枚）を入力。
+    3. **Analyze**: ボタンを押すと、レンジ内のハンドがボードにどう絡んでいるか（セット、フラッシュ、ドロー等）を棒グラフで比較表示します。
     """)
 
     st.divider()
 
-    st.subheader("4. サイドバー機能 (便利ツール)")
+    st.subheader("4. ⚖️ FLO8 モードの機能")
     st.markdown("""
-    - **⚙️ Scenario (SPR設定)** スタックの深さを設定します。
-      - **Deep**: ナッツを作る能力（Nut Equity）を重視します。
-      - **Short**: 単純な勝率（Raw Equity）を重視します。
-      
-    - **🔍 Hand Rank** 「1位のハンドは？」「1000位のハンドは？」など、順位からハンドを逆引きして分析ボタンでセットできます。
-      
-    - **🎨 Highlights (PLOのみ)** 3つのグループ（🔴赤、🔵青、🟢緑）にそれぞれ違う条件を設定し、散布図上で色分け表示できます。
-      
-    - **🏷️ Filter (PLOのみ)** 「Aハイのみ」「ダブルスーテッドのみ」など、条件を絞ってランキングを表示します。
+    - **Hutchinson Points**: FLO8のハンド評価点（20点以上が目安）。
+    - **Scoop %**: ハイ・ロー総取りの確率。
     """)
     
     st.success("Analysis powered by custom simulation engine.")
