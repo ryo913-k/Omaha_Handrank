@@ -111,7 +111,6 @@ def set_input_callback(target_key, value):
 # 3. Logic: Strict Evaluation & Outs
 # ==========================================
 def eval_5card_score(cards):
-    """Return score for sorting: StraightFlush > Quads > ... > HighCard"""
     ranks = sorted([c.rank for c in cards], reverse=True)
     suits = [c.suit for c in cards]
     is_flush = (len(set(suits)) == 1)
@@ -128,13 +127,12 @@ def eval_5card_score(cards):
     if counts[0] == 3 and counts[1] == 2: return 700 + [k for k,v in rc.items() if v==3][0]
     if is_flush: return 600 + ranks[0]
     if is_str: return 500 + str_high
-    if counts[0] == 3: return 400 + [k for k,v in rc.items() if v==3][0] # Set/Trips
+    if counts[0] == 3: return 400 + [k for k,v in rc.items() if v==3][0]
     if counts[0] == 2 and counts[1] == 2: return 300 + max([k for k,v in rc.items() if v==2])
     if counts[0] == 2: return 200 + [k for k,v in rc.items() if v==2][0]
     return 100 + ranks[0]
 
 def get_best_score_strict(hand_cards, board_cards):
-    """PLO Strict: 2 from hand, 3 from board"""
     best = -1
     for h in combinations(hand_cards, 2):
         for b in combinations(board_cards, 3):
@@ -143,61 +141,30 @@ def get_best_score_strict(hand_cards, board_cards):
     return best
 
 def precompute_nut_scores(board_cards):
-    """
-    Board + 任意のカードr が落ちたとき、理論上最強のスコアを計算しておく。
-    (Nut Outs判定の高速化のため)
-    """
-    nut_scores = {} # {rank_idx: max_possible_score}
+    nut_scores = {}
     deck_ranks = range(13)
-    
-    # 仮想敵は任意の2枚を持てる
-    # -> Board(3) + r(1) + Enemy(2) = 6枚からベストハンドを作る
-    # これは計算が重いので、「Board + r」の構成から理論値を逆算する
-    
     for r in deck_ranks:
-        # このランクrがボードに追加されたとする
-        # ここで可能な最強のストレート、フラッシュ等を判定
-        
-        # 1. Flush Potential?
-        # Board+r に3枚以上のスートがあれば、Aハイフラッシュがナッツ
-        # (ボードペアがあればFHがナッツだが、まずはFlush/Straightに注目)
         sim_board_ranks = [c.rank for c in board_cards] + [r]
-        sim_board_suits = [c.suit for c in board_cards] # rのスーツは不定だが、ナッツ判定なので「都合の良いスーツ」を想定
-        
-        # 簡略化: ストレートのナッツスコアだけ計算する（フラッシュは別判定）
-        # Board+r (4 cards) のランクセット
         br_set = set(sim_board_ranks)
-        
-        # Find best possible straight given br_set
         best_str = -1
-        # Check A-high down to 5-high
-        for top in range(12, 2, -1): # 12(A) down to 3(5)
+        for top in range(12, 2, -1):
             needed = {top, top-1, top-2, top-3, top-4}
             if top == 3: needed = {0,1,2,3,12}
-            
-            # 敵は2枚持てるので、neededのうち3枚がbr_setにあれば成立可能
             if len(needed.intersection(br_set)) >= 3:
                 best_str = 500 + top
                 break
-        
         nut_scores[r] = best_str if best_str != -1 else 0
-        
     return nut_scores
 
 def evaluate_hand_and_draws(hand_cards, board_cards, nut_scores_map):
-    """
-    Evaluate Made Hand (Strict) and Outs (Semi-Strict + Nut Check)
-    """
-    # 1. Made Hand
     best_score = get_best_score_strict(hand_cards, board_cards)
     
     cat_map = {9:"StrFlush",8:"Quads",7:"FullHouse",6:"Flush",5:"Straight",4:"Set/Trips",3:"TwoPair",2:"Pair",1:"HighCard"}
     made_cat_val = best_score // 100
     made_label = cat_map.get(made_cat_val, "HighCard")
     
-    # 2. Draws (if not River)
     if len(board_cards) >= 5:
-        return made_label, [], {'Str':{'tot':0,'nut':0}, 'Fls':{'tot':0,'nut':0}}, 0
+        return made_label, "", {'Str':{'tot':0,'nut':0}, 'Fls':{'tot':0,'nut':0}}, 0
     
     suits = ['s','h','d','c']
     deck_ranks = range(13)
@@ -205,27 +172,21 @@ def evaluate_hand_and_draws(hand_cards, board_cards, nut_scores_map):
     
     outs = {'Str':{'tot':0,'nut':0}, 'Fls':{'tot':0,'nut':0}}
     
-    # --- Flush Outs ---
-    # Hand2 + Board2 match
+    # Flush Outs
     flush_draw_type = None
     for s in suits:
         h_c = sum(1 for c in hand_cards if c.suit==s)
         b_c = sum(1 for c in board_cards if c.suit==s)
         if h_c >= 2 and b_c == 2:
-            # Found FD
             rem = 13 - h_c - b_c
             outs['Fls']['tot'] = rem
-            
-            # Nut Check
             h_ranks = [c.rank for c in hand_cards if c.suit==s]
             b_ranks = [c.rank for c in board_cards if c.suit==s]
             max_b = max(b_ranks) if b_ranks else -1
-            
             is_nut = False
             if 12 in h_ranks: is_nut = True
             elif 11 in h_ranks and max_b==12: is_nut = True
             elif 10 in h_ranks and 12 in b_ranks and 11 in b_ranks: is_nut = True
-            
             if is_nut: 
                 outs['Fls']['nut'] = rem
                 flush_draw_type = "Nut FD"
@@ -233,48 +194,25 @@ def evaluate_hand_and_draws(hand_cards, board_cards, nut_scores_map):
                 flush_draw_type = "FD"
             break
             
-    # --- Straight Outs (Iterate 13 Ranks) ---
-    # Using the precomputed nut thresholds for speed
-    current_ranks = [c.rank for c in hand_cards] + [c.rank for c in board_cards]
-    
-    # 現在のストレート判定（改善用）
+    # Straight Outs
     curr_str_score = 0
     if made_cat_val == 5: curr_str_score = best_score
     
     for r in deck_ranks:
-        # Check if r is available (at least one suit not used)
         if all((r, s) in used for s in suits): continue
-        
-        # 仮にrが落ちた時のベストハンドスコア (Strict check 2+3)
-        # Note: We only care about Straights here.
-        # Strict check for specific rank r is heavy. 
-        # Approx: Check if Hand+Board+r contains a NEW/BETTER straight using 2 from hand
-        
-        # 簡易判定: Hand(4)+Board(3)+r(1) の8枚から、rを含み、Hand2枚を使うストレートがあるか
-        # ここは計算負荷とのトレードオフ。高速化のため「rを含む」かつ「ランクが伸びる」ものをカウント
-        
-        test_board = board_cards + [SimpleCard(f"{'23456789TJQKA'[r]}s")] # dummy suit
-        # Check strict
+        test_board = board_cards + [SimpleCard(f"{'23456789TJQKA'[r]}s")]
         sim_score = get_best_score_strict(hand_cards, test_board)
         
-        if 500 <= sim_score < 600: # It's a straight
-            if sim_score > curr_str_score: # Improves
-                # Count available suits for this rank
+        if 500 <= sim_score < 600:
+            if sim_score > curr_str_score:
                 av_suits = sum(1 for s in suits if (r,s) not in used)
-                # Check Flush conflict (if this out makes a flush on board?)
-                # Simplified: Assume straight outs are clean unless board implies flush
-                
                 outs['Str']['tot'] += av_suits
-                
-                # Nut Check
                 nut_limit = nut_scores_map.get(r, 999)
                 if sim_score >= nut_limit:
                     outs['Str']['nut'] += av_suits
 
-    # Create Draw Label
     draw_list = []
     if flush_draw_type: draw_list.append(flush_draw_type)
-    
     str_tot = outs['Str']['tot']
     str_nut = outs['Str']['nut']
     
@@ -284,7 +222,7 @@ def evaluate_hand_and_draws(hand_cards, board_cards, nut_scores_map):
         draw_list.append(label)
         
     draw_str = " + ".join(draw_list) if draw_list else "No Draw"
-    total_outs_val = outs['Str']['tot'] + outs['Fls']['tot'] # Overlap ignored for grouping key
+    total_outs_val = outs['Str']['tot'] + outs['Fls']['tot']
     
     return made_label, draw_str, outs, total_outs_val
 
@@ -323,7 +261,7 @@ def load_flo8_data(csv_path="flo8_ranking.csv"):
 # ==========================================
 st.title("🃏 Omaha Hand Analyzer")
 
-# Session
+# Init Session
 for k in ['plo_input', 'flo8_input', 'p1_fixed', 'p2_fixed', 'pf_board']:
     if k not in st.session_state: st.session_state[k] = ""
     tk = f"{k}_text"
@@ -340,32 +278,36 @@ with st.sidebar:
     st.divider()
 
 # ==========================
-# PLO PREFLOP (Restored)
+# PLO PREFLOP (RESTORED)
 # ==========================
 if game_mode == "PLO (High Only)":
     if df_plo is not None:
         with st.sidebar:
-            with st.expander("1. ⚙️ Scenario"):
+            with st.expander("1. ⚙️ Scenario", expanded=False):
                 spr = st.select_slider("Stack Depth", ["Short","Medium","Deep","Very Deep"], value="Medium")
                 nw = 0.0 if "Short" in spr else 0.3 if "Medium" in spr else 0.6 if "Deep" in spr else 0.8
                 st.caption(f"Nut Weight: {nw*100:.0f}%")
-            with st.expander("2. 🔍 Hand Rank"):
+            
+            with st.expander("2. 🔍 Hand Rank", expanded=False):
                 c1,c2=st.columns([1,2])
                 srk=c1.number_input("Rank",1,len(df_plo),1,label_visibility="collapsed")
                 if c2.button("Analyze"): set_input_callback('plo_input', df_plo.iloc[srk-1]['hand']); st.rerun()
-            with st.expander("3. 🎨 Highlights"):
+
+            with st.expander("3. 🎨 Highlights", expanded=False):
                 hl_tags_1 = st.multiselect("Group 1 (🔴 Red)", ["AA","KK","Double Suited"], key="hl1")
                 hl_tags_2 = st.multiselect("Group 2 (🔵 Blue)", ["Rundown","Double Pair"], key="hl2")
-            with st.expander("4. 🏷️ Filter"):
+                hl_tags_3 = st.multiselect("Group 3 (🟢 Green)", ["Single Suited","Monotone"], key="hl3")
+
+            with st.expander("4. 🏷️ Filter", expanded=True):
                 sel_top = st.multiselect("Top Rank", list("AKQJT98765432"))
                 inc_tags = st.multiselect("Include", ["AA","KK","Double Suited","Rundown"])
+                exc_tags = st.multiselect("Exclude", ["Monotone", "Rainbow"])
             
             d_limit = st.slider("List Limit", 5, 50, 10)
             f_df = df_plo
             if sel_top: f_df = f_df[f_df["top_rank"].isin(sel_top)]
-            if inc_tags: 
-                iset=set(inc_tags)
-                f_df = f_df[f_df["tags"].apply(lambda t: iset.issubset(set(t)))]
+            if inc_tags: f_df = f_df[f_df["tags"].apply(lambda t: set(inc_tags).issubset(set(t)))]
+            if exc_tags: f_df = f_df[f_df["tags"].apply(lambda t: set(exc_tags).isdisjoint(set(t)))]
             
             st.markdown(f"**Results (Top {d_limit})**")
             for _, r in f_df.head(d_limit).iterrows():
@@ -377,7 +319,7 @@ if game_mode == "PLO (High Only)":
         with c1:
             st.subheader("🔍 Hand Input")
             if st.button("🎲 Random"):
-                deck=[]; [deck.append(f"{r}{s}") for r in "AKQJT98765432" for s in "shdc"]
+                deck = [f"{r}{s}" for r in "AKQJT98765432" for s in "shdc"]
                 set_input_callback('plo_input', " ".join(random.sample(deck, 4))); st.rerun()
             inp = normalize_input_text(st.text_input("Hand", key='plo_input_text'))
             if inp: st.markdown(render_hand_html(" ".join(inp)), unsafe_allow_html=True)
@@ -416,21 +358,27 @@ if game_mode == "PLO (High Only)":
                 st.pyplot(fig3)
             with c4:
                 st.subheader("🌌 Scatter")
+                use_zoom = st.checkbox("Auto Zoom", value=True)
                 fig2, ax2 = plt.subplots(figsize=(5,3))
                 bg=df_plo.sample(2000)
                 ax2.scatter(bg["equity"], bg["nut_equity"], c='#eee', s=10)
-                ax2.scatter(row["equity"], row["nut_equity"], c='red', s=100, marker='*', zorder=10)
                 
                 # Highlights
-                for tags, col in [(hl_tags_1,'crimson'), (hl_tags_2,'dodgerblue')]:
+                for tags, col in [(hl_tags_1,'crimson'), (hl_tags_2,'dodgerblue'), (hl_tags_3,'limegreen')]:
                     if tags:
                         hset = set(tags)
                         sub = df_plo[df_plo["tags"].apply(lambda t: hset.issubset(set(t)))].sample(min(1000, len(df_plo)))
                         ax2.scatter(sub["equity"], sub["nut_equity"], fc='none', ec=col, s=30)
+                
+                ax2.scatter(row["equity"], row["nut_equity"], c='red', s=100, marker='*', zorder=10)
+                
+                if use_zoom:
+                    ax2.set_xlim(max(0, row['equity']-0.15), min(1, row['equity']+0.15))
+                    ax2.set_ylim(max(0, row['nut_equity']-0.15), min(1, row['nut_equity']+0.15))
                 st.pyplot(fig2)
 
 # ==========================
-# POSTFLOP RANGE (Improved)
+# POSTFLOP RANGE (Fixed)
 # ==========================
 elif game_mode == "Postflop Range":
     st.header("📊 Postflop Range Analysis")
@@ -442,7 +390,8 @@ elif game_mode == "Postflop Range":
         
         st.subheader("1. Board Input")
         c1,c2,c3 = st.columns(3)
-        deck = []; [deck.append(f"{r}{s}") for r in "AKQJT98765432" for s in "shdc"]
+        # Fix: Direct list creation to avoid None display bug
+        deck = [f"{r}{s}" for r in "AKQJT98765432" for s in "shdc"]
         if c1.button("🎲 Flop"): set_input_callback('pf_board', " ".join(random.sample(deck, 3))); st.rerun()
         if c2.button("🎲 Turn"): set_input_callback('pf_board', " ".join(random.sample(deck, 4))); st.rerun()
         if c3.button("🎲 River"): set_input_callback('pf_board', " ".join(random.sample(deck, 5))); st.rerun()
@@ -453,8 +402,7 @@ elif game_mode == "Postflop Range":
         if st.button("🚀 Analyze", type="primary"):
             if len(b_cards)<3: st.error("Need 3+ cards")
             else:
-                with st.spinner("Analyzing with strict PLO logic..."):
-                    # Sampling Hands
+                with st.spinner("Analyzing..."):
                     def get_sample(val):
                         limit = int(len(df_plo)*(val/100))
                         sub = df_plo.iloc[:limit]
@@ -463,46 +411,36 @@ elif game_mode == "Postflop Range":
                     p1h = get_sample(p1_val); p2h = get_sample(p2_val)
                     b_objs = [SimpleCard(c) for c in b_cards]
                     is_river = (len(b_cards)>=5)
-                    
-                    # Precompute Nut Thresholds for Fast Calc
                     nut_scores_map = precompute_nut_scores(b_objs)
                     
                     def analyze_range(h_list):
                         made_stats = defaultdict(int)
-                        # Pattern Grouping: (MadeLabel, DrawStr, TotalOuts) -> {count, example}
                         patterns = defaultdict(lambda: {'count':0, 'ex':""})
-                        
                         outs_agg = {'Str':{'tot':0,'nut':0}, 'Fls':{'tot':0,'nut':0}}
                         
                         for h_str in h_list:
                             h_objs = [SimpleCard(c) for c in h_str.split()]
                             made, draw, outs, tot_outs = evaluate_hand_and_draws(h_objs, b_objs, nut_scores_map)
-                            
                             made_stats[made] += 1
                             if not is_river:
                                 outs_agg['Str']['tot'] += outs['Str']['tot']
                                 outs_agg['Str']['nut'] += outs['Str']['nut']
                                 outs_agg['Fls']['tot'] += outs['Fls']['tot']
                                 outs_agg['Fls']['nut'] += outs['Fls']['nut']
-                                
-                                # Grouping for patterns
                                 if draw != "No Draw":
-                                    # Key logic: Sort primarily by Nut status then Total Outs
                                     key = (draw, tot_outs)
                                     patterns[key]['count'] += 1
                                     patterns[key]['ex'] = h_str
-                        
                         return made_stats, outs_agg, patterns
 
                     p1_made, p1_outs, p1_pat = analyze_range(p1h)
                     p2_made, p2_outs, p2_pat = analyze_range(p2h)
                     
-                    # --- Graphs ---
                     st.divider()
                     c_g1, c_g2 = st.columns(2)
                     with c_g1:
                         st.write("##### Made Hands")
-                        cats = ["Quads","FullHouse","Flush","Straight","Set/Trips","TwoPair","Pair","HighCard"]
+                        cats = ["StrFlush","Quads","FullHouse","Flush","Straight","Set/Trips","TwoPair","Pair","HighCard"]
                         fig1, ax1 = plt.subplots(figsize=(5,4))
                         y = np.arange(len(cats))
                         p1_v = [p1_made.get(c,0)/len(p1h)*100 for c in cats]
@@ -518,15 +456,12 @@ elif game_mode == "Postflop Range":
                             cats = ['Str', 'Fls']
                             fig2, ax2 = plt.subplots(figsize=(5,4))
                             x = np.arange(2)
-                            
                             p1_t = [p1_outs[k]['tot']/len(p1h) for k in cats]
                             p1_n = [p1_outs[k]['nut']/len(p1h) for k in cats]
                             p1_w = [t-n for t,n in zip(p1_t, p1_n)]
-                            
                             p2_t = [p2_outs[k]['tot']/len(p2h) for k in cats]
                             p2_n = [p2_outs[k]['nut']/len(p2h) for k in cats]
                             p2_w = [t-n for t,n in zip(p2_t, p2_n)]
-                            
                             ax2.bar(x-0.2, p1_n, 0.4, color='#1565C0', label='P1 Nut')
                             ax2.bar(x-0.2, p1_w, 0.4, bottom=p1_n, color='#90CAF9')
                             ax2.bar(x+0.2, p2_n, 0.4, color='#C62828', label='P2 Nut')
@@ -534,24 +469,17 @@ elif game_mode == "Postflop Range":
                             ax2.set_xticks(x); ax2.set_xticklabels(cats); ax2.legend()
                             st.pyplot(fig2)
                     
-                    # --- Top Draw Patterns ---
                     if not is_river:
                         st.divider()
                         st.subheader("🏆 Top Draw Patterns")
-                        
                         max_disp = st.slider("Max Items", 5, 30, 10)
                         
                         def show_patterns(pat_dict, total, title, color):
                             st.markdown(f"**{title}**")
-                            # Convert to list and sort
-                            # Priority: Nut Outs implied in Label? No, use Tot Outs for sorting now
-                            # Better sort: (HasNutFD, TotalOuts)
                             lst = []
                             for (lbl, outs), dat in pat_dict.items():
                                 is_nut_fd = "Nut FD" in lbl
                                 lst.append({'lbl':lbl, 'outs':outs, 'cnt':dat['count'], 'ex':dat['ex'], 'nfd':is_nut_fd})
-                            
-                            # Sort: Nut FD first, then High Outs
                             lst.sort(key=lambda x: (x['nfd'], x['outs']), reverse=True)
                             
                             for p in lst[:max_disp]:
@@ -575,42 +503,43 @@ elif game_mode == "Postflop Range":
                         with c_p2: show_patterns(p2_pat, len(p2h), "Player 2 Draws", "#999")
 
 # ==========================
-# FLO8 (Restored)
+# FLO8 (RESTORED)
 # ==========================
 elif game_mode == "FLO8 (Hi/Lo)":
     st.header("⚖️ FLO8 Strategy")
     with st.sidebar:
-        with st.expander("1. 🔍 Rank Search"):
-            c1,c2=st.columns([1,2])
-            rk=c1.number_input("Rank",1,len(df_flo8),1,label_visibility="collapsed")
-            if c2.button("Analyze"): set_input_callback('flo8_input', df_flo8.iloc[rk-1]['hand']); st.rerun()
-            
-    if st.button("🎲 Random Hand", key="rnd_flo8"):
-        deck=[]; [deck.append(f"{r}{s}") for r in "AKQJT98765432" for s in "shdc"]
-        set_input_callback('flo8_input', " ".join(random.sample(deck, 4))); st.rerun()
-        
-    i8 = normalize_input_text(st.text_input("Hand", key='flo8_input_text'))
-    if i8:
-        st.markdown(render_hand_html(" ".join(i8)), unsafe_allow_html=True)
-        if len(i8)==4:
+        with st.expander("1. 🔍 Rank Search", expanded=True):
+            if df_flo8 is not None:
+                c1,c2=st.columns([1,2])
+                rk=c1.number_input("Rank",1,len(df_flo8),1,label_visibility="collapsed")
+                if c2.button("Analyze"): set_input_callback('flo8_input', df_flo8.iloc[rk-1]['hand']); st.rerun()
+                
+    c1, c2 = st.columns([1,2])
+    with c1:
+        if st.button("🎲 Random Hand", key="rnd_flo8"):
+            deck=[f"{r}{s}" for r in "AKQJT98765432" for s in "shdc"]
+            set_input_callback('flo8_input', " ".join(random.sample(deck, 4))); st.rerun()
+        i8 = normalize_input_text(st.text_input("Hand", key='flo8_input_text'))
+        if i8: st.markdown(render_hand_html(" ".join(i8)), unsafe_allow_html=True)
+    
+    with c2:
+        if i8 and len(i8)==4:
             sc, dt = calculate_flo8_heuristic(" ".join(i8))
             st.metric("Hutchinson Points", sc, help="20+ points recommended")
             st.bar_chart(dt)
-            
-            # Lookup
             if df_flo8 is not None:
                 r = df_flo8[df_flo8["card_set"]==frozenset(i8)]
                 if not r.empty:
                     rr = r.iloc[0]
-                    c1,c2,c3 = st.columns(3)
-                    c1.metric("Scoop %", f"{rr['scoop_pct']:.1f}%")
-                    c2.metric("High Eq", f"{rr['high_equity']:.1f}%")
-                    c3.metric("Low Eq", f"{rr['low_equity']:.1f}%")
+                    cc1,cc2,cc3 = st.columns(3)
+                    cc1.metric("Scoop %", f"{rr['scoop_pct']:.1f}%")
+                    cc2.metric("High Eq", f"{rr['high_equity']:.1f}%")
+                    cc3.metric("Low Eq", f"{rr['low_equity']:.1f}%")
                     st.caption(f"Rank: #{rr['rank']} (Top {rr['pct_total']:.1f}%)")
 
 elif game_mode == "Guide":
     st.header("📖 Guide")
-    st.markdown("All features (PLO Preflop, Postflop Range, FLO8) are fully restored and optimized.")
+    st.markdown("PLO & FLO8 detailed features restored. Postflop bug fixed.")
 
 with st.sidebar:
     st.markdown("---")
