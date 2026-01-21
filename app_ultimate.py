@@ -6,9 +6,29 @@ import unicodedata
 from heuristics import calculate_flo8_heuristic
 
 # ==========================================
-# 1. Config & Styles
+# 1. Config & Styles (CSS Fixes)
 # ==========================================
 st.set_page_config(page_title="Omaha Hand Analyzer", layout="wide")
+
+# CSSによるスマホUI調整
+st.markdown("""
+<style>
+    /* マルチセレクトのドロップダウンがヘッダーの下に隠れないようにz-indexを調整 */
+    ul[data-testid="stSelectboxVirtualDropdown"] {
+        z-index: 99999 !important;
+    }
+    /* スマホでボタンを押しやすくする */
+    div.stButton > button {
+        width: 100%;
+        border-radius: 8px;
+        height: 3em;
+    }
+    /* サイドバーの余白調整 */
+    section[data-testid="stSidebar"] .block-container {
+        padding-top: 2rem;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # ==========================================
 # 2. Helper Classes & Functions
@@ -98,11 +118,10 @@ def set_input_callback(target_key, value):
     if widget_key in st.session_state:
         st.session_state[widget_key] = value
     
-    # カードセレクターのリセット
-    for suit in ['s', 'h', 'd', 'c']:
-        ms_key = f"ms_{suit}_{target_key}"
-        if ms_key in st.session_state:
-            st.session_state[ms_key] = []
+    # 選択リスト(temporary)のリセット
+    temp_key = f"temp_picker_{target_key}"
+    if temp_key in st.session_state:
+        st.session_state[temp_key] = []
 
 # ==========================================
 # 3. Data Loading
@@ -141,45 +160,68 @@ def load_flo8_data(csv_path="flo8_ranking.csv"):
     except: return None
 
 # ==========================================
-# 4. UI Components
+# 4. UI Components (Improved Card Picker)
 # ==========================================
 def render_card_selector(session_key):
-    with st.expander("🃏 Open Card Selector (by Suit)", expanded=False):
-        ranks_list = list("AKQJT98765432")
-        c_s, c_h, c_d, c_c = st.columns(4)
+    # Expanderの開閉状態管理
+    expander_state_key = f"expander_open_{session_key}"
+    if expander_state_key not in st.session_state:
+        st.session_state[expander_state_key] = False
+
+    with st.expander("🃏 Open Card Selector (Tap Buttons)", expanded=st.session_state[expander_state_key]):
+        # 一時保存用のリストを初期化
+        temp_key = f"temp_picker_{session_key}"
+        if temp_key not in st.session_state:
+            st.session_state[temp_key] = []
         
-        with c_s:
-            st.markdown("**♠ Spades**")
-            sel_s = st.multiselect("Spades", ranks_list, key=f"ms_s_{session_key}", label_visibility="collapsed")
-        with c_h:
-            st.markdown("**:red[♥ Hearts]**")
-            sel_h = st.multiselect("Hearts", ranks_list, key=f"ms_h_{session_key}", label_visibility="collapsed")
-        with c_d:
-            st.markdown("**:blue[♦ Diamonds]**")
-            sel_d = st.multiselect("Diamonds", ranks_list, key=f"ms_d_{session_key}", label_visibility="collapsed")
-        with c_c:
-            st.markdown("**:green[♣ Clubs]**")
-            sel_c = st.multiselect("Clubs", ranks_list, key=f"ms_c_{session_key}", label_visibility="collapsed")
+        current_selection = st.session_state[temp_key]
 
-        collected = [f"{r}s" for r in sel_s] + [f"{r}h" for r in sel_h] + [f"{r}d" for r in sel_d] + [f"{r}c" for r in sel_c]
-
-        if len(collected) == 4:
-            final_hand = " ".join(collected)
-            if st.session_state.get(session_key) != final_hand:
-                st.session_state[session_key] = final_hand
-                st.session_state[f"{session_key}_text"] = final_hand
+        # 現在の選択状態を表示
+        st.caption("Tap 4 cards:")
+        if current_selection:
+            st.markdown(render_hand_html(" ".join(current_selection)), unsafe_allow_html=True)
+            if st.button("Clear", key=f"clear_{session_key}"):
+                st.session_state[temp_key] = []
                 st.rerun()
-            return collected
-        elif len(collected) > 0:
-            st.caption(f"Selected: {len(collected)}/4 cards.")
+        else:
+            st.markdown("<div style='height:40px; color:#999;'>No cards selected</div>", unsafe_allow_html=True)
+
+        st.divider()
+
+        # タブでスート切り替え (ボタン方式 = キーボードが出ない)
+        t_s, t_h, t_d, t_c = st.tabs(["♠", "♥", "♦", "♣"])
         
-    return []
+        ranks = list("AKQJT98765432")
+        
+        def draw_suit_grid(suit_char, suit_icon):
+            cols = st.columns(4) # スマホで押しやすい4列
+            for i, r in enumerate(ranks):
+                card_val = f"{r}{suit_char}"
+                # 既に選ばれているか、4枚以上なら無効化
+                is_disabled = (card_val in current_selection) or (len(current_selection) >= 4)
+                
+                if cols[i % 4].button(f"{r}{suit_icon}", key=f"btn_{session_key}_{card_val}", disabled=is_disabled):
+                    current_selection.append(card_val)
+                    st.session_state[temp_key] = current_selection
+                    
+                    # 4枚揃ったら確定処理
+                    if len(current_selection) == 4:
+                        final_hand = " ".join(current_selection)
+                        set_input_callback(session_key, final_hand)
+                        st.session_state[temp_key] = [] # リセット
+                    st.rerun()
+
+        with t_s: draw_suit_grid('s', '♠')
+        with t_h: draw_suit_grid('h', '♥')
+        with t_d: draw_suit_grid('d', '♦')
+        with t_c: draw_suit_grid('c', '♣')
 
 # ==========================================
 # 5. Main Application Logic
 # ==========================================
 st.title("🃏 Omaha Hand Analyzer")
 
+# Init Session State
 if 'plo_input' not in st.session_state: st.session_state.plo_input = "As Ks Jd Th"
 if 'flo8_input' not in st.session_state: st.session_state.flo8_input = "Ad Ah 2s 3d"
 if 'plo_input_text' not in st.session_state: st.session_state.plo_input_text = st.session_state.plo_input
@@ -200,9 +242,12 @@ if game_mode == "PLO (High Only)":
     if df_plo is None:
         st.warning("Data loading failed. Please upload 'plo_detailed_ranking.zip'.")
     else:
-        # --- PLO Sidebar (Reordered) ---
+        # Common Variables
+        ranks_opt = list("AKQJT98765432")
+        avail_tags = ["AA","KK","QQ","Double Pair","Double Suited","Single Suited","A-High Suit","Rainbow","Monotone","Broadway","Perfect Rundown","Double Gap Rundown"]
+        
+        # --- SIDEBAR START ---
         with st.sidebar:
-            
             # 1. Scenario
             with st.expander("1. ⚙️ Scenario", expanded=False):
                 spr = st.select_slider("Stack Depth / SPR", ["Short","Medium","Deep","Very Deep"], value="Medium")
@@ -226,15 +271,13 @@ if game_mode == "PLO (High Only)":
                     st.caption(f"**{r['hand']}** (Top {r['pct']:.2f}%)")
 
             # 3. Highlights
-            avail_tags = ["AA","KK","QQ","Double Pair","Double Suited","Single Suited","A-High Suit","Rainbow","Monotone","Broadway","Perfect Rundown","Double Gap Rundown"]
             with st.expander("3. 🎨 Highlights", expanded=False):
                 hl_tags_1 = st.multiselect("Group 1 (🔴 Red)", avail_tags, key="hl1")
                 hl_tags_2 = st.multiselect("Group 2 (🔵 Blue)", avail_tags, key="hl2")
                 hl_tags_3 = st.multiselect("Group 3 (🟢 Green)", avail_tags, key="hl3")
 
-            # 4. Filter (Default Open)
+            # 4. Filter
             with st.expander("4. 🏷️ Filter", expanded=True):
-                ranks_opt = list("AKQJT98765432")
                 sel_top = st.multiselect("Top Rank", ranks_opt)
                 inc_tags = st.multiselect("Include", avail_tags)
                 exc_tags = st.multiselect("Exclude", avail_tags)
@@ -272,16 +315,19 @@ if game_mode == "PLO (High Only)":
                     st.caption(f"Found: {len(filtered_df):,}")
                 else: st.write("No hands found.")
             elif not (sel_top or inc_tags or exc_tags): st.write("(No filters)")
+        # --- SIDEBAR END ---
 
-        # --- PLO MAIN ---
+        # --- MAIN CONTENT ---
         st.header("🔥 PLO Strategy")
+        
         c1, c2 = st.columns([1, 1.3])
         with c1:
             st.subheader("🔍 Hand Input")
             render_card_selector('plo_input')
             
             inp_raw = st.text_input("Enter Hand (Text)", key='plo_input_text')
-            if inp_raw != st.session_state.plo_input: st.session_state.plo_input = inp_raw
+            if inp_raw != st.session_state.plo_input:
+                st.session_state.plo_input = inp_raw
 
             inp = normalize_input_text(st.session_state.plo_input)
             if inp: st.markdown(render_hand_html(" ".join(inp)), unsafe_allow_html=True)
@@ -324,6 +370,8 @@ if game_mode == "PLO (High Only)":
         if 'row' in locals():
             st.divider()
             cc1, cc2 = st.columns(2)
+            
+            # --- Equity Curve ---
             with cc1:
                 st.subheader("📈 Equity Curve")
                 seek_pct = st.slider("🔍 Seek Hand Strength (Top X%)", 0.0, 100.0, 10.0, 0.1)
@@ -349,6 +397,7 @@ if game_mode == "PLO (High Only)":
                 ax3.set_xlabel("Top X%"); ax3.set_ylabel("Equity")
                 st.pyplot(fig3)
 
+            # --- Scatter Plot ---
             with cc2:
                 st.subheader("🌌 Equity Scatter")
                 cmode = st.radio("Scatter", ["Mode A", "Mode B"], horizontal=True, label_visibility="collapsed")
@@ -379,7 +428,7 @@ if game_mode == "PLO (High Only)":
                     ymin, ymax = min(ymin, fy.min()), max(ymax, fy.max())
                     focused = True
                 
-                # Highlights 1-3
+                # Highlights
                 groups = [(hl_tags_1, 'crimson', 'Grp1(Red)'), 
                           (hl_tags_2, 'dodgerblue', 'Grp2(Blu)'), 
                           (hl_tags_3, 'limegreen', 'Grp3(Grn)')]
@@ -423,7 +472,6 @@ if game_mode == "PLO (High Only)":
 # ==========================================
 elif game_mode == "FLO8 (Hi/Lo)":
     with st.sidebar:
-        # 1. Rank Search
         with st.expander("1. 🔍 Hand Rank", expanded=True):
             if df_flo8 is not None:
                 c_rk8_1, c_rk8_2 = st.columns([1,2])
@@ -494,7 +542,7 @@ elif game_mode == "Guide":
     st.markdown("#### A. ハンド入力 (Hand Input)")
     st.write("2通りの方法でハンドを入力できます。")
     st.markdown("""
-    1. **🃏 Open Card Selector**: スートごとに分かれたパネルから、クリックで4枚を選択します（スマホ対応）。
+    1. **🃏 Open Card Selector**: スートごとに分かれたボタンから、タップで4枚を選択します（スマホ対応）。
     2. **テキスト入力**: `As Ks Jd Th` のように直接入力します（大文字小文字区別なし）。
     """)
     
