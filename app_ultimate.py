@@ -18,9 +18,16 @@ st.markdown("""
     .stButton button { width: 100%; border-radius: 8px; font-weight: bold; }
     section[data-testid="stSidebar"] .block-container { padding-top: 2rem; }
     .stMetric { background-color: #f0f2f6; padding: 10px; border-radius: 5px; }
-    .top-hand-box {
-        border: 1px solid #e0e0e0; padding: 10px; border-radius: 5px; margin-bottom: 5px; background-color: #fff;
+    
+    /* Draw Pattern Box */
+    .draw-box {
+        border: 1px solid #ddd; border-left: 5px solid #2196F3;
+        background-color: #fff; padding: 10px; margin-bottom: 8px; border-radius: 4px;
+        display: flex; justify-content: space-between; align-items: center;
     }
+    .draw-title { font-weight: bold; font-size: 16px; color: #333; }
+    .draw-outs { font-weight: bold; color: #d32f2f; font-size: 18px; }
+    .draw-meta { font-size: 12px; color: #666; margin-left: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -47,13 +54,13 @@ def normalize_input_text(text):
         if len(p) >= 2: cleaned.append(p[:-1].upper() + p[-1].lower())
     return cleaned
 
-def render_hand_html(hand_str, size=45):
+def render_hand_html(hand_str, size=40):
     if not hand_str: return ""
     cards = hand_str.split()
     suit_map = {'s': '♠', 'h': '♥', 'd': '♦', 'c': '♣'}
     color_map = {'s': 'black', 'h': '#d32f2f', 'd': '#1976d2', 'c': '#388e3c'}
     
-    html = "<div style='display:flex; gap:6px; margin-bottom:10px; flex-wrap: wrap;'>"
+    html = "<div style='display:flex; gap:4px; flex-wrap: wrap;'>"
     for c in cards:
         if len(c) < 2: continue
         rank = c[:-1]
@@ -63,10 +70,10 @@ def render_hand_html(hand_str, size=45):
         
         style = (
             f"width:{size}px; height:{size*1.35}px; background-color:white; "
-            f"border:1px solid #bbb; border-radius:5px; "
+            f"border:1px solid #bbb; border-radius:4px; "
             f"display:flex; justify-content:center; align-items:center; "
             f"font-size:{size*0.45}px; font-weight:bold; color:{color}; "
-            f"box-shadow:2px 2px 4px rgba(0,0,0,0.1);"
+            f"box-shadow:1px 1px 2px rgba(0,0,0,0.1);"
         )
         html += f"<div style='{style}'>{rank}{symbol}</div>"
     html += "</div>"
@@ -83,28 +90,17 @@ def get_hand_tags(hand_str):
     pairs = [r for r, c in rc.items() if c == 2]
     if 12 in pairs: tags.append("AA")
     if 11 in pairs: tags.append("KK")
-    if 10 in pairs: tags.append("QQ")
-    if len(pairs)==2: tags.append("Double Pair")
-    elif len(pairs)==1: tags.append("Single Pair")
-    elif len(set(ranks))==4: tags.append("No Pair")
-
+    
     sc = {s: suits.count(s) for s in suits}
     s_dist = sorted(sc.values(), reverse=True) + [0]*(4-len(sc))
     is_ds = (s_dist[0]==2 and s_dist[1]==2)
-    is_mono = (s_dist[0]==4)
-    is_ss = (s_dist[0]>=2 and not is_ds and not is_mono)
     
     if is_ds: tags.append("Double Suited")
-    if s_dist[0]==1: tags.append("Rainbow")
-    if is_mono: tags.append("Monotone")
-    if is_ss: tags.append("Single Suited")
     
     if len(set(ranks))==4:
         ur = sorted(list(set(ranks)), reverse=True)
         gaps = [ur[i]-ur[i+1] for i in range(3)]
         if gaps==[1,1,1]: tags.append("Perfect Rundown")
-        elif sum(gaps)==5: tags.append("Double Gap Rundown")
-        if min(ranks)>=8: tags.append("Broadway")
     return tags
 
 def set_input_callback(target_key, value):
@@ -112,35 +108,26 @@ def set_input_callback(target_key, value):
     widget_key = f"{target_key}_text"
     if widget_key in st.session_state:
         st.session_state[widget_key] = value
-    # セレクター一時状態のリセット
     temp_key = f"sel_temp_{target_key}"
     if temp_key in st.session_state:
         st.session_state[temp_key] = []
 
 # ==========================================
-# 3. Strict PLO Logic (Fixes Applied)
+# 3. Strict PLO Logic (Made Hands)
 # ==========================================
 def eval_5card_hand(cards):
-    """
-    5枚のカードから役とランクスコアを判定する
-    Return: (CategoryName, ScoreValue)
-    ScoreValue is used for sorting strength.
-    """
     ranks = sorted([c.rank for c in cards], reverse=True)
     suits = [c.suit for c in cards]
     is_flush = (len(set(suits)) == 1)
     
-    # Straight Check
     uniq = sorted(list(set(ranks)))
     is_straight = False
     str_high = -1
     if len(uniq) == 5:
         if uniq[4] - uniq[0] == 4:
-            is_straight = True
-            str_high = uniq[4]
-        elif uniq == [0, 1, 2, 3, 12]: # Wheel A,2,3,4,5
-            is_straight = True
-            str_high = 3 # 5 high
+            is_straight = True; str_high = uniq[4]
+        elif uniq == [0, 1, 2, 3, 12]:
+            is_straight = True; str_high = 3
     
     rc = Counter(ranks)
     counts = sorted(rc.values(), reverse=True)
@@ -156,140 +143,95 @@ def eval_5card_hand(cards):
     return "High Card", 100 + ranks[0]
 
 def evaluate_plo_hand_strict(hand_cards, board_cards):
-    """
-    PLO Rule: Must use exactly 2 from hand and 3 from board.
-    Iterate all combinations to find the best made hand.
-    """
     best_score = -1
     best_cat = "High Card"
-    
-    # Iterate all combinations: 2 from hand, 3 from board
     for h_comb in combinations(hand_cards, 2):
         for b_comb in combinations(board_cards, 3):
-            five_cards = list(h_comb) + list(b_comb)
-            cat, score = eval_5card_hand(five_cards)
-            
+            cat, score = eval_5card_hand(list(h_comb) + list(b_comb))
             if score > best_score:
                 best_score = score
                 best_cat = cat
-                
-    # Refine Category Names for Analytics (Set vs Trips)
-    # Set: Pocket pair in hand + 1 on board
-    # Trips: 1 in hand + Pair on board
+    
     if best_cat == "Set/Trips":
         h_ranks = [c.rank for c in hand_cards]
-        # Check if we have a pocket pair used in the score
-        # Using heuristic: if hand has pair matching the score rank -> Set
-        # Simpler: Check combinations again to be sure? 
-        # Score 4xx -> xx is the rank.
         rank_val = best_score - 400
-        if h_ranks.count(rank_val) >= 2:
-            best_cat = "Set"
-        else:
-            best_cat = "Trips"
-            
+        if h_ranks.count(rank_val) >= 2: best_cat = "Set"
+        else: best_cat = "Trips"
     return best_cat, best_score
 
-def calculate_outs_strict(hand_cards, board_cards, current_made):
-    """
-    Calculate outs strictly.
-    This is computationally heavy if done for every hand in range.
-    Optimized to run only if board is Flop/Turn.
-    """
-    if len(board_cards) == 5:
-        return {'Straight':0, 'Flush':0, 'FullHouse':0}, {'Straight':0, 'Flush':0, 'FullHouse':0}
-
-    deck_ranks = range(13)
-    suits = ['s','h','d','c']
-    used = set((c.rank, c.suit) for c in hand_cards + board_cards)
-    
-    outs_total = defaultdict(int)
-    outs_nut = defaultdict(int)
-    
-    # Only iterate if not already strong? No, always calc for analysis
-    # Optimization: Only check relevant cards? No, need full check.
-    # To keep it fast for 5000 hands, we simplify logic or accept slight delay.
-    # Streamlit Cloud can handle this for ~3000 hands in a few secs.
-    
-    # We will use a simplified check for outs to maintain speed
-    # (Checking 45 cards * (10 combos) * 5000 hands is too slow)
-    # Strategy: Use the previous logic (7 card best) for OUTS calculation as approximation,
-    # but use Strict logic for MADE HANDS.
-    
-    # Reverting to "7-card style" for OUTS ONLY to keep performance acceptable
-    # Because strict PLO outs calc is O(N^2) complexity.
-    # However, we must ensure flush/straight are valid.
-    
-    return calculate_detailed_outs_fast(hand_cards, board_cards)
-
+# ==========================================
+# 4. Outs Calculation (Fast Approx for Range)
+# ==========================================
 def get_best_straight_rank_7(ranks):
     uniq = sorted(list(set(ranks)))
     if len(uniq) < 5: return -1
     best = -1
     for i in range(len(uniq)-4):
-        if uniq[i+4] - uniq[i] == 4:
-            best = max(best, uniq[i+4])
+        if uniq[i+4] - uniq[i] == 4: best = max(best, uniq[i+4])
     if {0,1,2,3,12}.issubset(set(uniq)): best = max(best, 3)
     return best
 
 def calculate_detailed_outs_fast(hand_cards, board_cards):
-    # This function uses looser "best of 7" logic for SPEED in OUTS calculation only.
-    # It counts cards that improve the hand.
-    
+    """
+    Returns total outs count per category and NUT outs count per category.
+    """
     deck_ranks = range(13)
     suits = ['s','h','d','c']
     used = set((c.rank, c.suit) for c in hand_cards + board_cards)
     
     outs = {'Straight':{'total':0,'nut':0}, 'Flush':{'total':0,'nut':0}, 'FullHouse':{'total':0,'nut':0}}
     
-    # Pre-calc
     current_all = hand_cards + board_cards
     current_ranks = [c.rank for c in current_all]
     
-    # Check Flush Potential (Hand has 2 suited, Board has 2 suited)
-    flush_suit_out = None
+    # 1. Flush Outs
     for s in suits:
         h_c = sum(1 for c in hand_cards if c.suit==s)
         b_c = sum(1 for c in board_cards if c.suit==s)
         if h_c >= 2 and b_c == 2:
-            flush_suit_out = s
-            
-            # Count Outs
             remaining = 13 - h_c - b_c
             outs['Flush']['total'] = remaining
+            
             # Nut check
             h_ranks = [c.rank for c in hand_cards if c.suit==s]
-            if 12 in h_ranks: outs['Flush']['nut'] = remaining # A high
-            elif 11 in h_ranks and 12 in [c.rank for c in board_cards if c.suit==s]: outs['Flush']['nut'] = remaining # K high if A on board
-            break # Max 1 flush draw type
+            b_ranks = [c.rank for c in board_cards if c.suit==s]
+            max_b = max(b_ranks) if b_ranks else -1
             
-    # Check FH/Set Outs
-    # Logic: If we have 2 pairs (one in hand/board), a match makes FH
-    # Logic: If we have trips, board pair makes FH
-    # Simplified count for speed
-    
-    # Check Straight Outs (Iterative but simplified)
-    # Only iterate Ranks (13 iterations), assume suits don't block heavily except flush
-    
-    # This part is heavy if fully strict. We rely on the flush calc above and straight approx.
+            is_nut = False
+            if 12 in h_ranks: is_nut = True # A high
+            elif 11 in h_ranks and max_b == 12: is_nut = True # K high (A on board)
+            elif 10 in h_ranks and 12 in b_ranks and 11 in b_ranks: is_nut = True # Q high
+            
+            if is_nut: outs['Flush']['nut'] = remaining
+            break # One flush draw max
+            
+    # 2. Straight Outs (Approximate Iteration)
     for r in deck_ranks:
-        # Straight Test
         test_ranks = current_ranks + [r]
         str_rank = get_best_straight_rank_7(test_ranks)
+        
         if str_rank != -1:
-            # Check if this rank exists (at least one suit available)
-            if any((r, s) not in used for s in suits):
-                # Is it a new straight?
+            # Check if this rank is available
+            available_count = 0
+            for s in suits:
+                if (r, s) not in used: available_count += 1
+            
+            if available_count > 0:
+                # Check if it's NEW straight
                 if get_best_straight_rank_7(current_ranks) == -1:
-                    # Approximation: 4 outs per rank usually
-                    outs['Straight']['total'] += 4 
-                    # Nut check (Simplified)
-                    if str_rank >= 10: outs['Straight']['nut'] += 4
+                    outs['Straight']['total'] += available_count
+                    # Approx Nut Check: High straights usually nuts
+                    if str_rank >= 10: outs['Straight']['nut'] += available_count
+                    
+    # 3. Full House Outs (Trips/Two Pair -> FH)
+    # Simplified: Any pair on board + match in hand?
+    # Or Trips + Board Pair?
+    # Just counting board pairing cards or hand matching cards
     
     return outs
 
 # ==========================================
-# 4. Data Loading
+# 5. Data Loading & App
 # ==========================================
 @st.cache_data
 def load_plo_data(csv_path="plo_detailed_ranking.zip"):
@@ -322,11 +264,9 @@ def load_flo8_data(csv_path="flo8_ranking.csv"):
         return df
     except: return None
 
-# ==========================================
-# 5. Main Logic
-# ==========================================
 st.title("🃏 Omaha Hand Analyzer")
 
+# Init
 for k in ['plo_input', 'flo8_input', 'p1_fixed', 'p2_fixed', 'pf_board']:
     if k not in st.session_state: st.session_state[k] = ""
     tk = f"{k}_text"
@@ -353,18 +293,15 @@ if game_mode == "PLO (High Only)":
                 spr = st.select_slider("Stack Depth", ["Short","Medium","Deep","Very Deep"], value="Medium")
                 nw = 0.0 if "Short" in spr else 0.3 if "Medium" in spr else 0.6 if "Deep" in spr else 0.8
                 st.caption(f"Nut Weight: {nw*100:.0f}%")
-            
             with st.expander("2. 🔍 Hand Rank"):
                 c1,c2=st.columns([1,2])
                 srk=c1.number_input("Rank",1,len(df_plo),1,label_visibility="collapsed")
                 if c2.button("Analyze"):
                     h = df_plo[df_plo['rank']==srk].iloc[0]['hand']
                     set_input_callback('plo_input', h); st.rerun()
-
             with st.expander("3. 🏷️ Filter"):
                 sel_top = st.multiselect("Top Rank", list("AKQJT98765432"))
                 inc_tags = st.multiselect("Include", ["AA","KK","Double Suited","Rundown"])
-                
             d_limit = st.slider("List Limit", 5, 50, 10)
             
             filtered_df = df_plo
@@ -448,7 +385,6 @@ elif game_mode == "Postflop Range":
             else: p2_fix = st.text_input("Hand", key="p2f")
 
         st.subheader("1. Board Input")
-        
         c_rnd1, c_rnd2, c_rnd3 = st.columns(3)
         deck = []
         for r in "AKQJT98765432":
@@ -472,7 +408,7 @@ elif game_mode == "Postflop Range":
         if st.button("🚀 Analyze Range Hits", type="primary"):
             if len(b_cards)<3: st.error("Need 3+ cards")
             else:
-                with st.spinner("Simulating 3,000 hands..."): # Slightly reduced for stricter check performance
+                with st.spinner("Simulating 3,000 hands..."):
                     def get_range(mode, val, fix, df):
                         if "Fixed" in mode:
                             h = normalize_input_text(fix)
@@ -496,52 +432,82 @@ elif game_mode == "Postflop Range":
                             made_stats = defaultdict(int)
                             draw_stats = defaultdict(int)
                             
-                            best_hands = [] # List of (HandStr, Category, Score)
+                            # For Grouping Pattern
+                            draw_patterns = defaultdict(lambda: {'count':0, 'example':""})
                             
                             for h_str in h_list:
                                 h_objs = [SimpleCard(c) for c in h_str.split()]
-                                # Strict Made Hand
+                                # Made
                                 made, score = evaluate_plo_hand_strict(h_objs, b_objs)
                                 made_stats[made] += 1
-                                best_hands.append((h_str, made, score))
                                 
-                                # Outs (Draws)
-                                outs = calculate_outs_strict(h_objs, b_objs, made)
+                                # Outs
+                                outs = calculate_detailed_outs_fast(h_objs, b_objs)
+                                
+                                total_out_count = 0
+                                draw_labels = []
+                                
+                                # Summing
                                 for k in ['Straight','Flush','FullHouse']:
                                     cats_agg[k] += outs[k]['total']
                                     nut_agg[k] += outs[k]['nut']
+                                    total_out_count += outs[k]['total']
                                 
-                                # Draw Types (Simplified for graph)
-                                if outs['Flush']['nut'] > 0: draw_stats['Nut Flush Draw'] += 1
-                                elif outs['Flush']['total'] > 0: draw_stats['Flush Draw'] += 1
+                                # Draw Types Labels
+                                if outs['Flush']['nut'] > 0: 
+                                    draw_stats['Nut Flush Draw'] += 1
+                                    draw_labels.append("NFD")
+                                elif outs['Flush']['total'] > 0: 
+                                    draw_stats['Flush Draw'] += 1
+                                    draw_labels.append("FD")
                                 
                                 s_out = outs['Straight']['total']
-                                if s_out >= 13: draw_stats['Wrap (13+)'] += 1
-                                elif s_out >= 9: draw_stats['Wrap (9-12)'] += 1
-                                elif s_out >= 1: draw_stats['Straight Draw'] += 1
+                                if s_out >= 13: 
+                                    draw_stats['Wrap (13+)'] += 1
+                                    draw_labels.append(f"Wrap({s_out})")
+                                elif s_out >= 9: 
+                                    draw_stats['Wrap (9-12)'] += 1
+                                    draw_labels.append(f"Wrap({s_out})")
+                                elif s_out >= 1: 
+                                    draw_stats['Straight Draw'] += 1
+                                    draw_labels.append("Str")
+                                
+                                # Grouping logic for "Top Draw Patterns"
+                                if total_out_count > 0:
+                                    lbl = " + ".join(draw_labels) if draw_labels else "Other"
+                                    key = (total_out_count, lbl)
+                                    draw_patterns[key]['count'] += 1
+                                    draw_patterns[key]['example'] = h_str
                             
-                            # Sort best hands
-                            best_hands.sort(key=lambda x: x[2], reverse=True)
+                            # Sort patterns
+                            pat_list = []
+                            for (outs_num, label), dat in draw_patterns.items():
+                                pat_list.append({
+                                    'outs': outs_num, 
+                                    'label': label, 
+                                    'count': dat['count'], 
+                                    'pct': dat['count']/total*100, 
+                                    'example': dat['example']
+                                })
+                            pat_list.sort(key=lambda x: x['outs'], reverse=True)
                             
                             return (
                                 {k: v/total*100 for k,v in made_stats.items()}, 
                                 {k: v/total*100 for k,v in draw_stats.items()},
                                 {k: v/total for k,v in cats_agg.items()},
                                 {k: v/total for k,v in nut_agg.items()},
-                                best_hands[:5]
+                                pat_list
                             )
 
-                        p1_made, p1_draw, p1_avg, p1_nut, p1_top = analyze(p1h)
-                        p2_made, p2_draw, p2_avg, p2_nut, p2_top = analyze(p2h)
+                        p1_made, p1_draw, p1_avg, p1_nut, p1_pats = analyze(p1h)
+                        p2_made, p2_draw, p2_avg, p2_nut, p2_pats = analyze(p2h)
 
                         st.divider()
-                        
-                        # Graph 1: Made Hands
+                        # Graph 1
                         st.subheader("📊 1. Made Hands (Strict PLO)")
                         made_cats = ["Straight Flush", "Quads", "Full House", "Flush", "Straight", "Set", "Trips", "Two Pair", "One Pair", "High Card"]
                         fig1, ax1 = plt.subplots(figsize=(8, 4))
-                        y = np.arange(len(made_cats))
-                        h = 0.35
+                        y = np.arange(len(made_cats)); h = 0.35
                         p1_m = [p1_made.get(c,0) for c in made_cats]
                         p2_m = [p2_made.get(c,0) for c in made_cats]
                         ax1.barh(y+h/2, p1_m, h, label='P1', color='dodgerblue')
@@ -552,7 +518,7 @@ elif game_mode == "Postflop Range":
                         st.pyplot(fig1)
 
                         if not is_river:
-                            # Graph 2: Draw Types
+                            # Graph 2
                             st.divider()
                             st.subheader("🌊 2. Draw Types (Approx)")
                             draw_cats = ["Nut Flush Draw", "Flush Draw", "Wrap (13+)", "Wrap (9-12)", "Straight Draw"]
@@ -567,7 +533,7 @@ elif game_mode == "Postflop Range":
                             ax2.grid(axis='x', ls='--', alpha=0.3)
                             st.pyplot(fig2)
 
-                            # Graph 3: Average Outs
+                            # Graph 3
                             st.divider()
                             st.subheader("🎯 3. Average Outs")
                             out_cats = ["Straight", "Flush", "FullHouse"]
@@ -591,26 +557,43 @@ elif game_mode == "Postflop Range":
                             ax3.set_ylabel("Avg Outs"); ax3.legend()
                             ax3.grid(axis='y', ls='--', alpha=0.3)
                             st.pyplot(fig3)
-                        
-                        # Top Hands Display
-                        st.divider()
-                        st.subheader("🏆 Top Equity Hands in Range (Current Board)")
-                        c_top1, c_top2 = st.columns(2)
-                        with c_top1:
-                            st.markdown("**Player 1 (Best 5)**")
-                            for h, cat, sc in p1_top:
-                                st.markdown(f"<div class='top-hand-box'>{render_hand_html(h, size=30)}<b>{cat}</b></div>", unsafe_allow_html=True)
-                        with c_top2:
-                            st.markdown("**Player 2 (Best 5)**")
-                            for h, cat, sc in p2_top:
-                                st.markdown(f"<div class='top-hand-box'>{render_hand_html(h, size=30)}<b>{cat}</b></div>", unsafe_allow_html=True)
+                            
+                            # --- Top Draw Patterns ---
+                            st.divider()
+                            st.subheader("🏆 Top Draw Patterns (Grouped by Outs)")
+                            
+                            max_items = st.slider("Max Items", 5, 50, 10)
+                            
+                            c_pat1, c_pat2 = st.columns(2)
+                            
+                            def render_patterns(pats, title, color_bar):
+                                st.markdown(f"**{title}**")
+                                for p in pats[:max_items]:
+                                    label = p['label'] if p['label'] else "Weak Draws"
+                                    # Highlight high outs
+                                    outs_color = "#d32f2f" if p['outs'] >= 13 else "#333"
+                                    
+                                    st.markdown(
+                                        f"""
+                                        <div class="draw-box" style="border-left: 5px solid {color_bar};">
+                                            <div>
+                                                <div class="draw-title">{label}</div>
+                                                <div class="draw-meta">{p['count']} hands ({p['pct']:.1f}%)</div>
+                                            </div>
+                                            <div class="draw-outs" style="color:{outs_color}">{p['outs']} Outs</div>
+                                        </div>
+                                        """, unsafe_allow_html=True
+                                    )
+                                    st.markdown(render_hand_html(p['example'], size=25), unsafe_allow_html=True)
+
+                            with c_pat1: render_patterns(p1_pats, "Player 1 Patterns", "#2196F3")
+                            with c_pat2: render_patterns(p2_pats, "Player 2 Patterns", "#F44336")
 
 # -----------------
 # FLO8 & Guide
 # -----------------
 elif game_mode == "FLO8 (Hi/Lo)":
     st.header("⚖️ FLO8 Strategy")
-    render_card_selector_buttons('flo8_input')
     i8 = normalize_input_text(st.text_input("Hand", key='flo8_input_text'))
     if i8:
         st.markdown(render_hand_html(" ".join(i8)), unsafe_allow_html=True)
@@ -622,8 +605,8 @@ elif game_mode == "FLO8 (Hi/Lo)":
 elif game_mode == "Guide":
     st.header("📖 Guide")
     st.markdown("### Update Info")
-    st.markdown("- **Fixed**: Strict PLO rules (2 from hand, 3 from board) applied.")
-    st.markdown("- **Feature**: Top Equity Hands display added.")
+    st.markdown("- **Fixed**: Strict PLO rules (2 from hand, 3 from board).")
+    st.markdown("- **Feature**: Grouped 'Top Draw Patterns' to analyze range structure.")
 
 with st.sidebar:
     st.markdown("---")
