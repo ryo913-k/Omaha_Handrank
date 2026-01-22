@@ -74,40 +74,57 @@ def get_hand_tags(hand_str):
 def set_input_callback(target_key, value):
     st.session_state[target_key] = value
     st.session_state[f"{target_key}_text"] = value
+    # セレクターのリセット用キーを削除して初期化状態に戻す
     for s in ['s','h','d','c']:
         ms_key = f"ms_{s}_{target_key}"
         if ms_key in st.session_state:
-            st.session_state[ms_key] = []
+            del st.session_state[ms_key]
 
 def render_card_selector(session_key):
+    # 現在の入力値を取得してデフォルト値として解析
+    current_val = st.session_state.get(session_key, "")
+    current_cards = normalize_input_text(current_val)
+    
+    # スートごとに現在のカードを分類
+    defaults = {'s': [], 'h': [], 'd': [], 'c': []}
+    for c in current_cards:
+        if len(c) >= 2:
+            r = c[:-1]
+            s = c[-1].lower()
+            if s in defaults:
+                defaults[s].append(r)
+
     with st.expander("🃏 Open Card Selector (by Suit)", expanded=False):
         ranks_list = list("AKQJT98765432")
         c_s, c_h, c_d, c_c = st.columns(4)
+        
+        # default引数に現在のカードを渡す
         with c_s:
             st.markdown("**♠ Spades**")
-            sel_s = st.multiselect("Spades", ranks_list, key=f"ms_s_{session_key}", label_visibility="collapsed")
+            sel_s = st.multiselect("Spades", ranks_list, default=[r for r in defaults['s'] if r in ranks_list], key=f"ms_s_{session_key}", label_visibility="collapsed")
         with c_h:
             st.markdown("**:red[♥ Hearts]**")
-            sel_h = st.multiselect("Hearts", ranks_list, key=f"ms_h_{session_key}", label_visibility="collapsed")
+            sel_h = st.multiselect("Hearts", ranks_list, default=[r for r in defaults['h'] if r in ranks_list], key=f"ms_h_{session_key}", label_visibility="collapsed")
         with c_d:
             st.markdown("**:blue[♦ Diamonds]**")
-            sel_d = st.multiselect("Diamonds", ranks_list, key=f"ms_d_{session_key}", label_visibility="collapsed")
+            sel_d = st.multiselect("Diamonds", ranks_list, default=[r for r in defaults['d'] if r in ranks_list], key=f"ms_d_{session_key}", label_visibility="collapsed")
         with c_c:
             st.markdown("**:green[♣ Clubs]**")
-            sel_c = st.multiselect("Clubs", ranks_list, key=f"ms_c_{session_key}", label_visibility="collapsed")
+            sel_c = st.multiselect("Clubs", ranks_list, default=[r for r in defaults['c'] if r in ranks_list], key=f"ms_c_{session_key}", label_visibility="collapsed")
 
         collected = [f"{r}s" for r in sel_s] + [f"{r}h" for r in sel_h] + [f"{r}d" for r in sel_d] + [f"{r}c" for r in sel_c]
 
         if len(collected) == 4:
             final_hand = " ".join(collected)
+            # 現在の値と違う場合のみ更新
+            # 注意: Multiselectはユーザー操作で即時更新されるため、ここで書き換えてリランするとループする可能性がある
+            # そのため、「確定」ロジックではなく「反映」ロジックにする
             if st.session_state.get(session_key) != final_hand:
                 st.session_state[session_key] = final_hand
                 st.session_state[f"{session_key}_text"] = final_hand
-                for s in ['s','h','d','c']:
-                    ms_key = f"ms_{s}_{session_key}"
-                    if ms_key in st.session_state: del st.session_state[ms_key]
                 st.rerun()
             return collected
         elif len(collected) > 0:
             st.caption(f"Selected: {len(collected)}/4 cards.")
+            
     return []
