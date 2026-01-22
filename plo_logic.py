@@ -92,10 +92,12 @@ def render_plo_preflop(df_plo):
                 row = res.iloc[0]
                 eq = row["equity"] * 100; ne = row["nut_equity"] * 100
                 sc = (eq*(1-nw)) + ((row["nut_quality"]*100)*nw)
+                
+                # スマホ対応: ラベル短縮
                 m1,m2,m3 = st.columns(3)
-                m1.metric("Power Score", f"{sc:.1f}")
-                m2.metric("Raw Equity", f"{eq:.1f}%")
-                m3.metric("Nut Equity", f"{ne:.1f}%")
+                m1.metric("Pwr Score", f"{sc:.1f}")
+                m2.metric("Eq", f"{eq:.1f}%")
+                m3.metric("Nut Eq", f"{ne:.1f}%")
                 st.write("🏷️ " + " ".join([f"`{t}`" for t in row['tags']]))
                 st.caption(f"Rank: {int(row['rank']):,} (Top {row['pct']:.1f}%)")
             else: st.warning("Hand not found.")
@@ -187,6 +189,14 @@ def render_plo_preflop(df_plo):
                         focused = True
 
             ax2.scatter(mx, my, c='black', s=150, marker='*', ec='white', zorder=10, label='You')
+            
+            # 軸ラベルの追加
+            ax2.set_xlabel("Raw Equity")
+            if "Mode A" in cmode:
+                ax2.set_ylabel("Nut Quality")
+            else:
+                ax2.set_ylabel("Nut Equity")
+
             if use_auto_zoom:
                 if not focused: xmin, xmax, ymin, ymax = bx.min(), bx.max(), by.min(), by.max()
                 if xmax == xmin: xmin -= 0.1; xmax += 0.1
